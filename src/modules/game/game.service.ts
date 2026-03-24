@@ -45,7 +45,7 @@ export async function openBox(userId: string, boxId: string) {
         userId,
         type: "BOX_PURCHASE",
         amount: -box.price,
-        balanceBefore: walletAfterDeduct.cashBalance + box.price,
+        balanceBefore: walletAfterDeduct.cashBalance.plus(box.price),
         balanceAfter: walletAfterDeduct.cashBalance,
       },
     });
@@ -65,7 +65,7 @@ export async function openBox(userId: string, boxId: string) {
         userId,
         type: "BOX_REWARD",
         amount: reward,
-        balanceBefore: walletAfterReward.cashBalance - reward,
+        balanceBefore: walletAfterDeduct.cashBalance,
         balanceAfter: walletAfterReward.cashBalance,
       },
     });
@@ -146,7 +146,7 @@ export async function openBox(userId: string, boxId: string) {
                 userId: user.referredBy,
                 type: "REFERRAL",
                 amount: bonus,
-                balanceBefore: refWalletAfterReward.cashBalance - bonus,
+                balanceBefore: refWallet.cashBalance,
                 balanceAfter: refWalletAfterReward.cashBalance,
               },
             });

@@ -12,20 +12,24 @@ export async function creditWallet(
     throw new Error("Wallet not found");
   }
 
-  const newBalance = wallet.cashBalance + amount;
+  await tx.wallet.update({
+    where: { userId },
+    data: { cashBalance: { increment: amount } },
+  });
+
+  const walletAfterCredit = await tx.wallet.findUnique({ where: { userId } });
+
+  if (!walletAfterCredit) {
+    throw new Error("Wallet not found");
+  }
 
   await tx.transaction.create({
     data: {
       userId,
-      type: "CREDIT",
+      type: "BOX_REWARD",
       amount,
       balanceBefore: wallet.cashBalance,
-      balanceAfter: newBalance,
+      balanceAfter: walletAfterCredit.cashBalance,
     },
-  });
-
-  await tx.wallet.update({
-    where: { userId },
-    data: { cashBalance: newBalance },
   });
 }
