@@ -12,21 +12,25 @@ enum TransactionType {
   FREE_BOX
   REFERRAL
   VAULT_REWARD
+  WELCOME_BONUS
 }
 
 model User {
-  id          String   @id @default(uuid())
-  platformId  String   @unique
-  username    String?
-  freeBoxUsed Boolean  @default(false)
-  referredBy  String? // who invited this user
-  referrals   Int      @default(0)
-  createdAt   DateTime @default(now())
+  id                   String   @id @default(uuid())
+  platformId           String   @unique
+  username             String?
+  freeBoxUsed          Boolean  @default(false)
+  paidBoxesOpened      Int      @default(0)
+  welcomeBonusUnlocked Boolean  @default(false)
+  referredBy           String?
+  referrals            Int      @default(0)
+  createdAt            DateTime @default(now())
 
-  wallet       Wallet?
-  userVaults   UserVault[]
-  transactions Transaction[]
-  boxOpens     BoxOpen[]
+  wallet          Wallet?
+  userVaults      UserVault[]
+  transactions    Transaction[]
+  boxOpens        BoxOpen[]
+  idempotencyKeys IdempotencyKey[]
 }
 
 model Wallet {
@@ -47,17 +51,18 @@ model Transaction {
   balanceBefore Decimal         @db.Decimal(10, 2)
   balanceAfter  Decimal         @db.Decimal(10, 2)
   createdAt     DateTime        @default(now())
-
-  user User @relation(fields: [userId], references: [id])
-  box  Box? @relation(fields: [boxId], references: [id])
+  meta          Json?
+  user          User            @relation(fields: [userId], references: [id])
+  box           Box?            @relation(fields: [boxId], references: [id])
 
   @@index([userId, createdAt])
 }
 
 model Box {
-  id    String  @id @default(uuid())
-  name  String
-  price Decimal @db.Decimal(10, 2)
+  id          String  @id @default(uuid())
+  name        String
+  price       Decimal @db.Decimal(10, 2)
+  rewardTable Json?
 
   boxOpens     BoxOpen[]
   transactions Transaction[]
@@ -79,7 +84,7 @@ model BoxOpen {
 model Vault {
   id       String  @id @default(uuid())
   name     String
-  target   Int // number of boxes to open
+  target   Int
   reward   Decimal @db.Decimal(10, 2)
   isActive Boolean @default(true)
 
@@ -98,4 +103,16 @@ model UserVault {
 
   @@unique([userId, vaultId])
   @@index([userId, claimed])
+}
+
+model IdempotencyKey {
+  id           String   @id
+  userId       String
+  boxId        String
+  rewardAmount Decimal  @db.Decimal(10, 2)
+  createdAt    DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
 }

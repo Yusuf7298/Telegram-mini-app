@@ -7,7 +7,8 @@ function isValidString(value: any) {
 
 export async function openBoxController(req: Request, res: Response) {
   try {
-    const { userId, boxId } = req.body;
+    const { boxId, idempotencyKey } = req.body;
+    const userId = req.userId;
 
     if (!isValidString(userId)) {
       return res.status(400).json({
@@ -23,7 +24,14 @@ export async function openBoxController(req: Request, res: Response) {
       });
     }
 
-    const reward = await openBox(userId, boxId);
+    if (!isValidString(idempotencyKey)) {
+      return res.status(400).json({
+        success: false,
+        error: "idempotencyKey is required",
+      });
+    }
+
+    const reward = await openBox(userId, boxId, idempotencyKey);
 
     return res.json({
       success: true,
@@ -42,7 +50,7 @@ export async function openBoxController(req: Request, res: Response) {
 
 export async function freeBoxController(req: Request, res: Response) {
   try {
-    const { userId } = req.body;
+    const userId = req.userId;
 
     if (!isValidString(userId)) {
       return res.status(400).json({

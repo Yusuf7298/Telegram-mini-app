@@ -1,6 +1,8 @@
 import { Request, Response } from "express";
 import { prisma } from "../../config/db";
 
+type AuthenticatedRequest = Request & { userId?: string };
+
 function isValidString(value: unknown) {
   return typeof value === "string" && value.trim().length > 0;
 }
@@ -49,10 +51,9 @@ export async function registerUser(req: Request, res: Response) {
   }
 }
 
-export async function getReferrals(req: Request, res: Response) {
+export async function getReferrals(req: AuthenticatedRequest, res: Response) {
   try {
-    const userIdParam = req.params.userId;
-    const userId = Array.isArray(userIdParam) ? userIdParam[0] : userIdParam;
+    const userId = req.userId;
 
     if (!userId?.trim()) {
       return res.status(400).json({ error: "userId is required" });

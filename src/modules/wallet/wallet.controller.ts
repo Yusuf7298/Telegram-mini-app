@@ -3,7 +3,7 @@ import { prisma } from "../../config/db";
 
 export async function getWallet(req: Request, res: Response) {
   try {
-    const { userId } = req.params;
+    const userId = req.userId;
 
     if (typeof userId !== "string" || !userId.trim()) {
       return res.status(400).json({ error: "userId is required" });

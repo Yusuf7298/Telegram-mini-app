@@ -4,6 +4,8 @@ import userRoutes from "./modules/user/user.routes";
 import walletRoutes from "./modules/wallet/wallet.routes";
 import gameRoutes from "./modules/game/game.routes";
 import vaultRoutes from "./modules/vault/vault.routes";
+import authRoutes from "./modules/auth/auth.routes";
+import { authMiddleware } from "./middleware/auth.middleware";
 
 
 const app = express();
@@ -15,6 +17,8 @@ app.get("/", (req, res) => {
   res.send("API Running 🚀");
 });
 
+app.use("/api/auth", authRoutes);
+app.use("/api", authMiddleware);
 app.use("/api/user", userRoutes);
 app.use("/api/wallet", walletRoutes);
 app.use("/api/game", gameRoutes);

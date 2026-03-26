@@ -7,7 +7,8 @@ function isValidString(value: unknown) {
 
 export async function claimVaultController(req: Request, res: Response) {
   try {
-    const { userId, vaultId } = req.body;
+    const { vaultId } = req.body;
+    const userId = req.userId;
 
     if (!isValidString(userId) || !isValidString(vaultId)) {
       return res
@@ -29,8 +30,7 @@ export async function getUserVaultProgressController(
   res: Response
 ) {
   try {
-    const userIdParam = req.params.userId;
-    const userId = Array.isArray(userIdParam) ? userIdParam[0] : userIdParam;
+    const userId = req.userId;
 
     if (!isValidString(userId)) {
       return res.status(400).json({ success: false, error: "userId is required" });
