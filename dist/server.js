@@ -46,10 +46,27 @@ app.use("/api/user", user_routes_1.default);
 app.use("/api/wallet", wallet_routes_1.default);
 app.use("/api/game", game_routes_1.default);
 app.use("/api/vault", vault_routes_1.default);
-const port = Number(process.env.PORT) || 5000;
-app.listen(port, () => {
-    console.log(`Server running on port ${port}`);
-});
 app.get("/test", async (req, res) => {
     res.send("Working ✅");
 });
+app.use((err, _req, res, _next) => {
+    console.error(err);
+    const error = err;
+    const status = typeof error.status === "number" && error.status >= 400
+        ? error.status
+        : 500;
+    const message = typeof error.message === "string" && error.message.trim().length > 0
+        ? error.message
+        : "Internal Server Error";
+    return res.status(status).json({
+        success: false,
+        error: message,
+    });
+});
+const port = Number(process.env.PORT) || 5000;
+if (process.env.VERCEL !== "1") {
+    app.listen(port, () => {
+        console.log(`Server running on port ${port}`);
+    });
+}
+exports.default = app;
