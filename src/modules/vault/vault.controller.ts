@@ -18,7 +18,7 @@ export async function claimVaultController(req: Request, res: Response) {
 
     const reward = await claimVault(userId, vaultId);
 
-    return res.json({ success: true, reward });
+    return res.json({ success: true, data: { reward } });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Something went wrong";
     return res.status(400).json({ success: false, error: message });
@@ -38,7 +38,7 @@ export async function getUserVaultProgressController(
 
     const data = await getUserVaultProgress(userId);
 
-    return res.json(data);
+    return res.json({ success: true, data });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Something went wrong";
     return res.status(500).json({ success: false, error: message });

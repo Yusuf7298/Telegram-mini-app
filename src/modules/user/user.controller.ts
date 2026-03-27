@@ -12,7 +12,7 @@ export async function registerUser(req: Request, res: Response) {
     const { platformId, username, referrerId } = req.body;
 
     if (!isValidString(platformId)) {
-      return res.status(400).json({ error: "platformId is required" });
+      return res.status(400).json({ success: false, error: "platformId is required" });
     }
 
     const normalizedReferrerId = isValidString(referrerId)
@@ -26,7 +26,7 @@ export async function registerUser(req: Request, res: Response) {
       });
 
       if (!referrer) {
-        return res.status(400).json({ error: "Invalid referrerId" });
+        return res.status(400).json({ success: false, error: "Invalid referrerId" });
       }
     }
 
@@ -34,7 +34,7 @@ export async function registerUser(req: Request, res: Response) {
       where: { platformId },
     });
 
-    if (existing) return res.json(existing);
+    if (existing) return res.json({ success: true, data: existing });
 
     const user = await prisma.user.create({
       data: {
@@ -45,9 +45,9 @@ export async function registerUser(req: Request, res: Response) {
       },
     });
 
-    res.json(user);
+    return res.json({ success: true, data: user });
   } catch (err) {
-    res.status(500).json({ error: "Failed to create user" });
+    return res.status(500).json({ success: false, error: "Failed to create user" });
   }
 }
 
@@ -56,7 +56,7 @@ export async function getReferrals(req: AuthenticatedRequest, res: Response) {
     const userId = req.userId;
 
     if (!userId?.trim()) {
-      return res.status(400).json({ error: "userId is required" });
+      return res.status(400).json({ success: false, error: "userId is required" });
     }
 
     const user = await prisma.user.findUnique({
@@ -65,12 +65,12 @@ export async function getReferrals(req: AuthenticatedRequest, res: Response) {
     });
 
     if (!user) {
-      return res.status(404).json({ error: "User not found" });
+      return res.status(404).json({ success: false, error: "User not found" });
     }
 
-    res.json(user);
+    return res.json({ success: true, data: user });
   } catch (err) {
-    res.status(500).json({ error: "Failed to fetch referrals" });
+    return res.status(500).json({ success: false, error: "Failed to fetch referrals" });
   }
 }
 
@@ -79,7 +79,7 @@ export async function getCurrentUser(req: AuthenticatedRequest, res: Response) {
     const userId = req.userId;
 
     if (!userId?.trim()) {
-      return res.status(400).json({ error: "userId is required" });
+      return res.status(400).json({ success: false, error: "userId is required" });
     }
 
     const user = await prisma.user.findUnique({
@@ -87,11 +87,11 @@ export async function getCurrentUser(req: AuthenticatedRequest, res: Response) {
     });
 
     if (!user) {
-      return res.status(404).json({ error: "User not found" });
+      return res.status(404).json({ success: false, error: "User not found" });
     }
 
-    return res.json(user);
+    return res.json({ success: true, data: user });
   } catch (err) {
-    return res.status(500).json({ error: "Failed to fetch user" });
+    return res.status(500).json({ success: false, error: "Failed to fetch user" });
   }
 }

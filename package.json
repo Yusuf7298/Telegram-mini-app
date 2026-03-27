@@ -4,7 +4,15 @@
   "main": "index.js",
   "scripts": {
     "test": "jest",
-    "dev": "ts-node-dev src/server.ts"
+    "dev": "ts-node-dev src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "migrate:deploy": "prisma migrate deploy",
+    "seed": "prisma db seed",
+    "deploy:prepare": "npx prisma migrate deploy && npx prisma db seed"
+  },
+  "prisma": {
+    "seed": "ts-node prisma/seed/seed.ts"
   },
   "keywords": [],
   "author": "",
@@ -35,6 +43,7 @@
     "@types/node": "^25.5.0",
     "jest": "^30.3.0",
     "ts-jest": "^29.4.6",
+    "ts-node": "^10.9.2",
     "ts-node-dev": "^2.0.0",
     "typescript": "^6.0.2"
   }

@@ -71,6 +71,7 @@ describe("telegramLogin", () => {
 
     expect(res.status).toHaveBeenCalledWith(401);
     expect(res.json).toHaveBeenCalledWith({
+      success: false,
       error: "Invalid Telegram signature",
     });
     expect(mockAuthWithTelegram).not.toHaveBeenCalled();
@@ -90,6 +91,7 @@ describe("telegramLogin", () => {
 
     expect(res.status).toHaveBeenCalledWith(401);
     expect(res.json).toHaveBeenCalledWith({
+      success: false,
       error: "Telegram authentication expired",
     });
     expect(mockAuthWithTelegram).not.toHaveBeenCalled();
