@@ -7,6 +7,6 @@ import {
 const router = Router();
 
 router.post("/claim", claimVaultController);
-router.get("/:userId", getUserVaultProgressController);
+router.get("/", getUserVaultProgressController);
 
 export default router;

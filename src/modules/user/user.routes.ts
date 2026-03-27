@@ -1,9 +1,10 @@
 import { Router } from "express";
-import { getReferrals, registerUser } from "./user.controller";
+import { getCurrentUser, getReferrals, registerUser } from "./user.controller";
 
 const router = Router();
 
 router.post("/register", registerUser);
-router.get("/referrals/:userId", getReferrals);
+router.get("/", getCurrentUser);
+router.get("/referrals", getReferrals);
 
 export default router;

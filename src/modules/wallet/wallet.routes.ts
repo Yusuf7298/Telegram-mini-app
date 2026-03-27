@@ -3,6 +3,6 @@ import { getWallet } from "./wallet.controller";
 
 const router = Router();
 
-router.get("/:userId", getWallet);
+router.get("/", getWallet);
 
 export default router;

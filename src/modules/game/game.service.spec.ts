@@ -11,7 +11,7 @@ jest.mock("../../config/db", () => ({
   prisma: mockPrisma,
 }));
 
-import { openBox } from "./game.service";
+import { openBox, openFreeBox } from "./game.service";
 
 type DecimalLike = Prisma.Decimal;
 
@@ -19,6 +19,8 @@ type WalletState = {
   cashBalance: DecimalLike;
   bonusBalance: DecimalLike;
 };
+
+type WalletStateByUser = Record<string, WalletState>;
 
 function d(value: number | string) {
   return new Prisma.Decimal(value);
@@ -32,9 +34,15 @@ function buildTx(args: {
 }) {
   const reward = args.reward ?? 100;
 
-  const state: WalletState = {
-    cashBalance: d(args.walletCash),
-    bonusBalance: d(args.walletBonus),
+  const state: WalletStateByUser = {
+    "user-1": {
+      cashBalance: d(args.walletCash),
+      bonusBalance: d(args.walletBonus),
+    },
+    "ref-1": {
+      cashBalance: d(1000),
+      bonusBalance: d(0),
+    },
   };
 
   const transactionCreate = jest.fn().mockResolvedValue({});
@@ -49,33 +57,48 @@ function buildTx(args: {
     },
     wallet: {
       findUnique: jest.fn().mockImplementation(async ({ where }: { where: { userId: string } }) => {
-        if (where.userId === "user-1") {
+        const wallet = state[where.userId];
+
+        if (wallet) {
           return {
-            userId: "user-1",
-            cashBalance: state.cashBalance,
-            bonusBalance: state.bonusBalance,
+            userId: where.userId,
+            cashBalance: wallet.cashBalance,
+            bonusBalance: wallet.bonusBalance,
           };
         }
+
         return null;
       }),
-      updateMany: jest.fn().mockImplementation(async ({ data }: any) => {
-        state.cashBalance = data.cashBalance;
-        state.bonusBalance = data.bonusBalance;
+      updateMany: jest.fn().mockImplementation(async ({ where, data }: any) => {
+        const wallet = state[where.userId];
+
+        if (!wallet) {
+          return { count: 0 };
+        }
+
+        wallet.cashBalance = data.cashBalance;
+        wallet.bonusBalance = data.bonusBalance;
         return { count: 1 };
       }),
-      update: jest.fn().mockImplementation(async ({ data }: any) => {
+      update: jest.fn().mockImplementation(async ({ where, data }: any) => {
+        const wallet = state[where.userId];
+
+        if (!wallet) {
+          return null;
+        }
+
         if (data?.cashBalance?.increment !== undefined) {
-          state.cashBalance = state.cashBalance.plus(d(data.cashBalance.increment));
+          wallet.cashBalance = wallet.cashBalance.plus(d(data.cashBalance.increment));
         }
 
         if (data?.bonusBalance?.increment !== undefined) {
-          state.bonusBalance = state.bonusBalance.plus(d(data.bonusBalance.increment));
+          wallet.bonusBalance = wallet.bonusBalance.plus(d(data.bonusBalance.increment));
         }
 
         return {
-          userId: "user-1",
-          cashBalance: state.cashBalance,
-          bonusBalance: state.bonusBalance,
+          userId: where.userId,
+          cashBalance: wallet.cashBalance,
+          bonusBalance: wallet.bonusBalance,
         };
       }),
     },
@@ -158,10 +181,10 @@ describe("openBox wallet deduction", () => {
     expect(totalDeduction.equals(d(200))).toBe(true);
 
     const expectedNewCashAfterReward = d(300).plus(d(100));
-    expect(state.cashBalance.equals(expectedNewCashAfterReward)).toBe(true);
-    expect(state.bonusBalance.equals(d(100))).toBe(true);
-    expect(state.cashBalance.greaterThanOrEqualTo(0)).toBe(true);
-    expect(state.bonusBalance.greaterThanOrEqualTo(0)).toBe(true);
+    expect(state["user-1"].cashBalance.equals(expectedNewCashAfterReward)).toBe(true);
+    expect(state["user-1"].bonusBalance.equals(d(100))).toBe(true);
+    expect(state["user-1"].cashBalance.greaterThanOrEqualTo(0)).toBe(true);
+    expect(state["user-1"].bonusBalance.greaterThanOrEqualTo(0)).toBe(true);
   });
 
   it("CASE 2: cash + bonus", async () => {
@@ -179,10 +202,10 @@ describe("openBox wallet deduction", () => {
     expect(totalDeduction.equals(d(250))).toBe(true);
 
     const expectedNewCashAfterReward = d(0).plus(d(100));
-    expect(state.cashBalance.equals(expectedNewCashAfterReward)).toBe(true);
-    expect(state.bonusBalance.equals(d(50))).toBe(true);
-    expect(state.cashBalance.greaterThanOrEqualTo(0)).toBe(true);
-    expect(state.bonusBalance.greaterThanOrEqualTo(0)).toBe(true);
+    expect(state["user-1"].cashBalance.equals(expectedNewCashAfterReward)).toBe(true);
+    expect(state["user-1"].bonusBalance.equals(d(50))).toBe(true);
+    expect(state["user-1"].cashBalance.greaterThanOrEqualTo(0)).toBe(true);
+    expect(state["user-1"].bonusBalance.greaterThanOrEqualTo(0)).toBe(true);
   });
 
   it("CASE 3: bonus only", async () => {
@@ -200,10 +223,10 @@ describe("openBox wallet deduction", () => {
     expect(totalDeduction.equals(d(200))).toBe(true);
 
     const expectedNewCashAfterReward = d(0).plus(d(100));
-    expect(state.cashBalance.equals(expectedNewCashAfterReward)).toBe(true);
-    expect(state.bonusBalance.equals(d(100))).toBe(true);
-    expect(state.cashBalance.greaterThanOrEqualTo(0)).toBe(true);
-    expect(state.bonusBalance.greaterThanOrEqualTo(0)).toBe(true);
+    expect(state["user-1"].cashBalance.equals(expectedNewCashAfterReward)).toBe(true);
+    expect(state["user-1"].bonusBalance.equals(d(100))).toBe(true);
+    expect(state["user-1"].cashBalance.greaterThanOrEqualTo(0)).toBe(true);
+    expect(state["user-1"].bonusBalance.greaterThanOrEqualTo(0)).toBe(true);
   });
 
   it("CASE 4: exact match", async () => {
@@ -221,10 +244,10 @@ describe("openBox wallet deduction", () => {
     expect(totalDeduction.equals(d(200))).toBe(true);
 
     const expectedNewCashAfterReward = d(0).plus(d(100));
-    expect(state.cashBalance.equals(expectedNewCashAfterReward)).toBe(true);
-    expect(state.bonusBalance.equals(d(0))).toBe(true);
-    expect(state.cashBalance.greaterThanOrEqualTo(0)).toBe(true);
-    expect(state.bonusBalance.greaterThanOrEqualTo(0)).toBe(true);
+    expect(state["user-1"].cashBalance.equals(expectedNewCashAfterReward)).toBe(true);
+    expect(state["user-1"].bonusBalance.equals(d(0))).toBe(true);
+    expect(state["user-1"].cashBalance.greaterThanOrEqualTo(0)).toBe(true);
+    expect(state["user-1"].bonusBalance.greaterThanOrEqualTo(0)).toBe(true);
   });
 
   it("CASE 5: insufficient balance", async () => {
@@ -241,5 +264,195 @@ describe("openBox wallet deduction", () => {
     );
 
     expect(tx.transaction.create).not.toHaveBeenCalled();
+  });
+
+  it("returns the same reward for an already-used idempotency key", async () => {
+    mockPrisma.idempotencyKey.findUnique.mockResolvedValue({
+      userId: "user-1",
+      rewardAmount: d(321),
+    });
+
+    const reward = await openBox("user-1", "box-1", "idem-replayed");
+
+    expect(reward).toBe(321);
+    expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("unlocks welcome bonus after 5 paid boxes", async () => {
+    const { tx, transactionCreate } = buildTx({
+      walletCash: 1000,
+      walletBonus: 0,
+      boxPrice: 100,
+    });
+
+    tx.user.update.mockResolvedValue({
+      paidBoxesOpened: 5,
+      welcomeBonusUnlocked: false,
+      referredBy: null,
+    });
+
+    tx.user.updateMany.mockImplementation(async ({ where }: any) => {
+      if (where?.welcomeBonusUnlocked === false) {
+        return { count: 1 };
+      }
+
+      return { count: 0 };
+    });
+
+    mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+    await openBox("user-1", "box-1", "idem-welcome");
+
+    expect(tx.wallet.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { userId: "user-1" },
+        data: { bonusBalance: { increment: 1000 } },
+      })
+    );
+
+    const welcomeBonusTxn = transactionCreate.mock.calls.find(
+      ([arg]: any[]) =>
+        arg?.data?.type === "BOX_REWARD" && arg?.data?.amount === 1000
+    );
+
+    expect(welcomeBonusTxn).toBeTruthy();
+  });
+
+  it("triggers referral reward once on first paid box", async () => {
+    const { tx, transactionCreate } = buildTx({
+      walletCash: 1000,
+      walletBonus: 0,
+      boxPrice: 100,
+    });
+
+    tx.boxOpen.count.mockResolvedValue(0);
+    tx.user.update.mockResolvedValue({
+      paidBoxesOpened: 1,
+      welcomeBonusUnlocked: false,
+      referredBy: "ref-1",
+    });
+
+    tx.user.updateMany.mockImplementation(async ({ where }: any) => {
+      if (where?.referredBy === "ref-1") {
+        return { count: 1 };
+      }
+
+      return { count: 0 };
+    });
+
+    mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+    await openBox("user-1", "box-1", "idem-referral");
+
+    const referralTxn = transactionCreate.mock.calls.find(
+      ([arg]: any[]) =>
+        arg?.data?.type === "REFERRAL" && arg?.data?.userId === "ref-1"
+    );
+
+    expect(referralTxn).toBeTruthy();
+  });
+
+  it("prevents referral reward abuse when referral already consumed", async () => {
+    const { tx, transactionCreate } = buildTx({
+      walletCash: 1000,
+      walletBonus: 0,
+      boxPrice: 100,
+    });
+
+    tx.boxOpen.count.mockResolvedValue(0);
+    tx.user.update.mockResolvedValue({
+      paidBoxesOpened: 1,
+      welcomeBonusUnlocked: false,
+      referredBy: "ref-1",
+    });
+
+    tx.user.updateMany.mockImplementation(async ({ where }: any) => {
+      if (where?.referredBy === "ref-1") {
+        return { count: 0 };
+      }
+
+      return { count: 0 };
+    });
+
+    mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+    await openBox("user-1", "box-1", "idem-no-referral");
+
+    const referralTxn = transactionCreate.mock.calls.find(
+      ([arg]: any[]) => arg?.data?.type === "REFERRAL"
+    );
+
+    expect(referralTxn).toBeFalsy();
+  });
+});
+
+describe("openFreeBox", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  function createFreeBoxTx(args: {
+    paidBoxesOpened: number;
+    alreadyUsed?: boolean;
+  }) {
+    let freeBoxUsed = args.alreadyUsed ?? false;
+
+    const tx = {
+      user: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: "user-1",
+          freeBoxUsed,
+          paidBoxesOpened: args.paidBoxesOpened,
+        }),
+        updateMany: jest.fn().mockImplementation(async () => {
+          if (freeBoxUsed) {
+            return { count: 0 };
+          }
+
+          freeBoxUsed = true;
+          return { count: 1 };
+        }),
+      },
+      wallet: {
+        findUnique: jest.fn().mockResolvedValue({
+          userId: "user-1",
+          cashBalance: d(500),
+          bonusBalance: d(200),
+        }),
+      },
+      transaction: {
+        create: jest.fn().mockResolvedValue({}),
+      },
+    };
+
+    return tx;
+  }
+
+  it("allows free box only once", async () => {
+    const tx = createFreeBoxTx({ paidBoxesOpened: 2 });
+    mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+    const first = await openFreeBox("user-1");
+    expect(first.unlocked).toBe(false);
+
+    await expect(openFreeBox("user-1")).rejects.toThrow("Free box already used");
+  });
+
+  it("does not increase paid box progress", async () => {
+    const tx = createFreeBoxTx({ paidBoxesOpened: 2 });
+    mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+    const result = await openFreeBox("user-1");
+
+    expect(result.paidBoxesOpened).toBe(2);
+    expect(result.paidBoxesRequired).toBe(5);
+    expect(result.paidBoxesRemaining).toBe(3);
+    expect(tx.user.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: "user-1",
+        freeBoxUsed: false,
+      },
+      data: { freeBoxUsed: true },
+    });
   });
 });

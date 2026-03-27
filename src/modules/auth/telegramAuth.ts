@@ -1,16 +1,33 @@
 import crypto from "crypto";
 
+const MAX_AUTH_AGE_SECONDS = 60 * 5;
+
 export function verifyTelegramData(initData: string) {
   const botToken = process.env.TELEGRAM_BOT_TOKEN;
   if (!botToken) {
-    return false;
+    throw new Error("Telegram auth is not configured");
   }
 
   const urlParams = new URLSearchParams(initData);
 
   const hash = urlParams.get("hash");
   if (!hash) {
-    return false;
+    throw new Error("Telegram hash is missing");
+  }
+
+  const authDateRaw = urlParams.get("auth_date");
+  if (!authDateRaw) {
+    throw new Error("Telegram auth_date is missing");
+  }
+
+  const authDate = Number(authDateRaw);
+  if (!Number.isFinite(authDate)) {
+    throw new Error("Telegram auth_date is invalid");
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  if (now - authDate > MAX_AUTH_AGE_SECONDS) {
+    throw new Error("Telegram authentication expired");
   }
 
   urlParams.delete("hash");
@@ -30,5 +47,18 @@ export function verifyTelegramData(initData: string) {
     .update(dataCheckString)
     .digest("hex");
 
-  return hmac === hash;
+  const providedHash = Buffer.from(hash, "hex");
+  const expectedHash = Buffer.from(hmac, "hex");
+
+  if (providedHash.length !== expectedHash.length) {
+    throw new Error("Invalid Telegram signature");
+  }
+
+  const isValid = crypto.timingSafeEqual(providedHash, expectedHash);
+
+  if (!isValid) {
+    throw new Error("Invalid Telegram signature");
+  }
+
+  return true;
 }

@@ -10,8 +10,13 @@ export async function telegramLogin(req: Request, res: Response) {
       return res.status(400).json({ error: "initData is required" });
     }
 
-    if (!verifyTelegramData(initData)) {
-      return res.status(401).json({ error: "Invalid Telegram data" });
+    try {
+      verifyTelegramData(initData);
+    } catch (authErr: unknown) {
+      const authMessage =
+        authErr instanceof Error ? authErr.message : "Invalid Telegram data";
+
+      return res.status(401).json({ error: authMessage });
     }
 
     const user = await authWithTelegram(initData);
