@@ -1,0 +1,7 @@
+model SystemStats {
+    id               String  @id @default("global")
+    totalIn          Decimal @default(0)
+    totalOut         Decimal @default(0)
+    totalBoxesOpened Int     @default(0)
+    jackpotWins      Int     @default(0)
+}

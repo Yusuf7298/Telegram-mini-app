@@ -1,0 +1,212 @@
+model BoxReward {
+  id             String  @id @default(uuid())
+  boxId          String
+  reward         Decimal
+  weight         Int
+  category       String?
+  label          String?
+  isJackpot      Boolean @default(false)
+  maxWinners     Int?
+  currentWinners Int     @default(0)
+  box Box @relation(fields: [boxId], references: [id])
+  @@index([boxId])
+  @@index([boxId, isJackpot])
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+datasource db {
+  provider = "postgresql"
+}
+enum TransactionType {
+  BOX_PURCHASE
+  BOX_REWARD
+  FREE_BOX
+  REFERRAL
+  VAULT_REWARD
+  WELCOME_BONUS
+}
+
+model User {
+  id                   String   @id @default(uuid())
+  platformId           String   @unique
+  username             String?
+  referralCode         String   @unique
+  referredById         String?
+  referralCount        Int      @default(0)
+  freeBoxUsed          Boolean  @default(false)
+  paidBoxesOpened      Int      @default(0)
+  welcomeBonusUnlocked Boolean  @default(false)
+  createdAt            DateTime @default(now())
+  referralRewardPending Boolean @default(false)
+  referralActivityMet   Boolean @default(false)
+  isFrozen              Boolean @default(false)
+  wallet          Wallet?
+  userVaults      UserVault[]
+  transactions    Transaction[]
+  boxOpens        BoxOpen[]
+  boxOpenLogs     BoxOpenLog[]
+  idempotencyKeys IdempotencyKey[]
+  bonusUsages    BonusUsage[]
+  referralLogs   ReferralLog[]         @relation("UserReferralLogs")
+  referredLogs   ReferralLog[]         @relation("UserReferredLogs")
+  suspiciousLogs SuspiciousActionLog[]
+  auditLogs      AuditLog[]
+  rewardRevokes  RewardRevocation[]
+  referredBy User?  @relation("UserReferredBy", fields: [referredById], references: [id])
+  referrals  User[] @relation("UserReferredBy")
+}
+
+model Wallet {
+  id           String  @id @default(uuid())
+  userId       String  @unique
+  cashBalance  Decimal @default(0) @db.Decimal(10, 2)
+  bonusBalance Decimal @default(0) @db.Decimal(10, 2)
+  bonusLocked Boolean @default(false)
+  user User @relation(fields: [userId], references: [id])
+  // DB-level non-negative balance constraints should be enforced via a migration or manual SQL, not Prisma schema.
+}
+
+model Transaction {
+  id            String          @id @default(uuid())
+  userId        String
+  boxId         String?
+  type          TransactionType
+  amount        Decimal         @db.Decimal(10, 2)
+  balanceBefore Decimal         @db.Decimal(10, 2)
+  balanceAfter  Decimal         @db.Decimal(10, 2)
+  createdAt     DateTime        @default(now())
+  meta          Json?
+  user          User            @relation(fields: [userId], references: [id])
+  box           Box?            @relation(fields: [boxId], references: [id])
+  @@index([userId, createdAt])
+}
+
+model Box {
+  id          String  @id @default(uuid())
+  name        String
+  price       Decimal @db.Decimal(10, 2)
+  rewardTable Json?
+  boxOpens     BoxOpen[]
+  transactions Transaction[]
+  boxRewards   BoxReward[]
+}
+
+model BoxOpen {
+  id           String   @id @default(uuid())
+  userId       String
+  boxId        String
+  rewardAmount Decimal  @db.Decimal(10, 2)
+  createdAt    DateTime @default(now())
+  user User @relation(fields: [userId], references: [id])
+  box  Box  @relation(fields: [boxId], references: [id])
+  @@index([userId, createdAt])
+}
+
+model Vault {
+  id       String  @id @default(uuid())
+  name     String
+  target   Int
+  reward   Decimal @db.Decimal(10, 2)
+  isActive Boolean @default(true)
+  userVaults UserVault[]
+}
+
+model UserVault {
+  id       String  @id @default(uuid())
+  userId   String
+  vaultId  String
+  progress Int     @default(0)
+  claimed  Boolean @default(false)
+  user  User  @relation(fields: [userId], references: [id])
+  vault Vault @relation(fields: [vaultId], references: [id])
+  @@unique([userId, vaultId])
+  @@index([userId, claimed])
+}
+
+model IdempotencyKey {
+  id           String   @id
+  userId       String
+  boxId        String
+  rewardAmount Decimal  @db.Decimal(10, 2)
+  createdAt    DateTime @default(now())
+  action    String
+  status    String    @default("pending")
+  expiresAt DateTime?
+  user User @relation(fields: [userId], references: [id])
+  @@index([userId])
+}
+
+model ReferralLog {
+  id         String   @id @default(uuid())
+  referrerId String
+  referredId String
+  ip         String
+  deviceId   String?
+  createdAt  DateTime @default(now())
+  suspicious Boolean  @default(false)
+
+  referrer User @relation("UserReferralLogs", fields: [referrerId], references: [id])
+  referred User @relation("UserReferredLogs", fields: [referredId], references: [id])
+
+  @@unique([referrerId, referredId])
+  @@index([ip])
+  @@index([deviceId])
+}
+
+model BoxOpenLog {
+  id         String   @id @default(uuid())
+  userId     String
+  ip         String
+  deviceId   String?
+  action     String
+  createdAt  DateTime @default(now())
+  suspicious Boolean  @default(false)
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+model BonusUsage {
+  id        String   @id @default(uuid())
+  userId    String
+  bonusType String
+  amount    Decimal  @db.Decimal(10, 2)
+  usedAt    DateTime @default(now())
+  user User @relation(fields: [userId], references: [id])
+}
+
+model SuspiciousActionLog {
+  id        String   @id @default(uuid())
+  userId    String
+  action    String
+  details   String?
+  flaggedAt DateTime @default(now())
+  reviewed  Boolean  @default(false)
+  user User @relation(fields: [userId], references: [id])
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  userId    String
+  action    String
+  details   String?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+model RewardRevocation {
+  id        String   @id @default(uuid())
+  userId    String
+  rewardId  String
+  revokedAt DateTime @default(now())
+  reason    String?
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+model TelegramAuthLog {
+  hash      String   @id
+  createdAt DateTime @default(now())
+}
