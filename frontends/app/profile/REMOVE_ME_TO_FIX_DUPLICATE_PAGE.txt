@@ -1,1 +1,0 @@
-This file exists to remind you: To fix the Next.js build error, you must delete either /app/profile/page.tsx or /app/(main)/profile/page.tsx. Only one profile page can exist for the /profile route.

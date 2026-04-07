@@ -26,7 +26,7 @@ export default function WalletPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-[#000C1D] via-[#081625] to-[#010A1D] pb-24">
+    <div className="min-h-screen bg-gradient-to-bl from-[#2C5364] via-[#000000] to-[#020617] pb-24">
       {/* Header */}
       <div className="flex items-center justify-between px-4 pt-6 pb-4 border-b border-gray-800">
         <button onClick={handleClick} className="w-10 h-10 flex items-center justify-center rounded-full cursor-pointer bg-transparent border border-white/10 shadow text-white">

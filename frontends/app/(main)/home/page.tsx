@@ -33,6 +33,7 @@ export default function HomePage() {
     const interval = setInterval(() => {
       if (totalSeconds <= 0) return clearInterval(interval);
       totalSeconds -= 1;
+      <div className="min-h-screen bg-gradient-to-bl from-[#2C5364] via-[#000000] to-[#020617]">
       setTimer(`${String(Math.floor(totalSeconds / 60)).padStart(2, "0")}:${String(totalSeconds % 60).padStart(2, "0")}`);
     }, 1000);
     return () => clearInterval(interval);
