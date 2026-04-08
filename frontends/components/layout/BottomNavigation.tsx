@@ -1,10 +1,11 @@
 "use client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Play, Wallet, Gift, User } from "lucide-react";
+import { Play, Wallet, Gift, User, Home } from "lucide-react";
 
 const navItems = [
-  { href: "/", label: "Play", icon: Play },
+  { href: "/", label: "Home", icon: Home},
+  { href: "/play", label: "Play", icon: Play },
   { href: "/wallet", label: "Wallet", icon: Wallet },
   { href: "/rewards", label: "Rewards", icon: Gift },
   { href: "/profile", label: "Account", icon: User },

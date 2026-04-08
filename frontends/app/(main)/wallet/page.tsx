@@ -25,6 +25,16 @@ export default function WalletPage() {
     router.back();
   }
 
+  function handleDeposite() {
+    // Handle deposit action
+    router.push('/deposit');
+  }
+
+  function handleWithdrawal() {
+    // Handle withdrawal action
+    router.push('/withdraw');
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-bl from-[#2C5364] via-[#000000] to-[#020617] pb-24">
       {/* Header */}
@@ -74,8 +84,8 @@ export default function WalletPage() {
 
       {/* Deposit & Withdrawal Buttons */}
       <div className="mx-4 flex flex-col gap-3 mb-4">
-        <button className="w-full py-3 rounded-lg bg-[#00FFB2] cursor-pointer text-[#000000] font-bold text-[12px] shadow hover:bg-[#00e6a0] ">DEPOSIT</button>
-        <button className="w-full py-3 rounded-lg bg-[#222B36] cursor-pointer text-white font-bold text-[12px] border border-white/10 hover:bg-[#2a3540]">WITHDRAWAL</button>
+        <button onClick={handleDeposite} className="w-full py-3 rounded-lg bg-[#00FFB2] cursor-pointer text-[#000000] font-bold text-[12px] shadow hover:bg-[#00e6a0] ">DEPOSIT</button>
+        <button onClick={handleWithdrawal} className="w-full py-3 rounded-lg bg-[#222B36] cursor-pointer text-white font-bold text-[12px] border border-white/10 hover:bg-[#2a3540]">WITHDRAWAL</button>
       </div>
 
       {/* Recent Transactions */}

@@ -4,7 +4,7 @@ import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { useRouter } from "next/navigation";
 import Image from 'next/image';
-import { Copy, Settings, ArrowLeft, Bell } from 'lucide-react';
+import { Copy, Settings, ArrowLeft, Bell, UserPlus } from 'lucide-react';
 
 const notifications = [
   { date: '08-10-26', message: 'Congratulations you won ₦1,000 by...' },
@@ -121,12 +121,13 @@ export default function ProfilePage() {
 
         {/* Referrals */}
         <div className="mb-2 flex items-center gap-2">
-          <span className="font-bold text-white text-[20px] font-Rubik">REFERRALS</span>
+          <UserPlus className="w-5 h-5 text-[#1DE1B6]" />
+          <span className="font-bold text-white text-[20px] font-Rubik uppercase">REFERRALS</span>
         </div>
         <Card className="bg-[#0F172A80] mb-4 p-0 overflow-x-auto">
           <table className="min-w-full text-left">
             <thead>
-              <tr className="text-[#A1AFC3] text-[12px] font-Rubik">
+              <tr className="text-[#FFFFFF] text-[12px] font-Rubik">
                 <th className="py-2 px-4">Username</th>
                 <th className="py-2 px-4">Joined</th>
                 <th className="py-2 px-4">Status</th>
@@ -138,7 +139,7 @@ export default function ProfilePage() {
                 <tr key={i} className="border-t border-white/10">
                   <td className="py-2 px-4 whitespace-nowrap text-[12px] font-Poppins">{r.username}</td>
                   <td className="py-2 px-4 whitespace-nowrap text-[12px] font-Poppins ">{r.joined}</td>
-                  <td className={`py-2 px-4 whitespace-nowrap font-bold ${r.status === 'Active' ? 'text-[#1DE1B6]' : 'text-[#FFC700]'}`}>{r.status}</td>
+                  <td className={`py-2 px-4 whitespace-nowrap font-bold text-[12px] font-Poppins ${r.status === 'Active' ? 'text-[#1DE1B6]' : 'text-[#FFC700]'}`}>{r.status}</td>
                   <td className="py-2 px-4 whitespace-nowrap text-[12px] font-Poppins">{r.earning}</td>
                 </tr>
               ))}
