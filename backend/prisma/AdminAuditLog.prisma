@@ -1,0 +1,8 @@
+model AdminAuditLog {
+    id        String   @id @default(uuid())
+    action    String
+    entity    String
+    entityId  String?
+    data      Json?
+    createdAt DateTime @default(now())
+}

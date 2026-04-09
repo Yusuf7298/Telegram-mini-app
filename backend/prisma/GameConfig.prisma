@@ -1,0 +1,4 @@
+model GameConfig {
+    id          String @id @default("global")
+    rtpModifier Float  @default(1)
+}
