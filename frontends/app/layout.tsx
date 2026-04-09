@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
-import MobileLayout from '@/components/layout/MobileLayout';
+import AppShell from '@/components/layout/AppShell';
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -23,15 +23,13 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  // Only wrap main app routes, not auth routes
-  const isAuthRoute = typeof window !== 'undefined' && window.location.pathname.startsWith('/(auth)');
   return (
     <html
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">
-        {isAuthRoute ? children : <MobileLayout>{children}</MobileLayout>}
+        <AppShell>{children}</AppShell>
       </body>
     </html>
   );

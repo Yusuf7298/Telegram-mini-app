@@ -14,13 +14,10 @@ const rankStyles = [
   "bg-gradient-to-r from-orange-400 to-orange-200 text-orange-900",
 ];
 
-import MobileAppLayout from '@/components/layout/MobileLayout';
-
 export default function LeaderboardPage() {
   return (
-    <MobileAppLayout>
-      <div className="px-4 flex flex-col items-center">
-        <div className="w-full max-w-sm bg-[#101B2A] rounded-2xl shadow-lg p-6 flex flex-col items-center mt-8 mb-4">
+    <div className="px-4 flex flex-col items-center">
+      <div className="w-full max-w-sm bg-[#101B2A] rounded-2xl shadow-lg p-6 flex flex-col items-center mt-8 mb-4">
         <h1 className="text-2xl font-bold text-white mb-4">Leaderboard</h1>
         <div className="w-full">
           <div className="flex font-bold text-gray-300 border-b border-[#232B3C] pb-2 mb-2">
@@ -41,8 +38,7 @@ export default function LeaderboardPage() {
             </div>
           ))}
         </div>
-        </div>
       </div>
-    </MobileAppLayout>
+    </div>
   );
 }

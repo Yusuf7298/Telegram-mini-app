@@ -14,8 +14,6 @@ const referrals = [
   { name: "John", date: "2026-03-26", status: "Pending", reward: 0 },
 ];
 
-import MobileAppLayout from '@/components/layout/MobileLayout';
-
 export default function ReferralsPage() {
   const [copied, setCopied] = useState(false);
 
@@ -26,10 +24,9 @@ export default function ReferralsPage() {
   };
 
   return (
-    <MobileAppLayout>
-      <div className="px-4 flex flex-col items-center">
-        {/* Referral Code Card */}
-        <div className="w-full max-w-sm bg-[#101B2A] rounded-2xl shadow-lg p-6 flex flex-col items-center mt-8 mb-4">
+    <div className="px-4 flex flex-col items-center">
+      {/* Referral Code Card */}
+      <div className="w-full max-w-sm bg-[#101B2A] rounded-2xl shadow-lg p-6 flex flex-col items-center mt-8 mb-4">
         <div className="text-white font-bold text-lg mb-2">Your Referral Code</div>
         <div className="flex items-center gap-2 mb-4">
           <span className="bg-[#232B3C] text-blue-400 font-mono px-4 py-2 rounded-lg text-lg tracking-widest">{referralCode}</span>
@@ -71,8 +68,7 @@ export default function ReferralsPage() {
             </div>
           ))}
         </div>
-        </div>
       </div>
-    </MobileAppLayout>
+    </div>
   );
 }
