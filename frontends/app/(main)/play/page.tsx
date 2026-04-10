@@ -3,6 +3,7 @@ import { ArrowLeft, BellIcon, Trophy, Wallet } from "lucide-react";
 import { useState } from "react";
 import Image from "next/image";
 import { useRouter } from 'next/navigation';
+import { ReferralCard } from "@/components/referral/ReferralCard";
 
 const topWinners = [
   { name: 'AJ', amount: '₦10,000', tone: 'from-[#ffb347] to-[#ff7a18]' },
@@ -268,25 +269,7 @@ export default function PlayPage() {
         </div>
 
         {/* Invite Friends */}
-        <div className="mb-6 overflow-hidden rounded-[28px] border border-white/10 bg-[linear-gradient(135deg,_#C7C3E9_0%,_#8F92B0_48%,_#7F7C88_100%)] px-5 py-5 shadow-[0_16px_40px_rgba(0,0,0,0.28)]">
-          <div className="flex items-center justify-between gap-4">
-            <div className="flex-1">
-              <div className="text-[18px] font-bold font-Rubik tracking-[-0.04em] text-white">EARN N500</div>
-              <div className="mt-3 max-w-[220px] text-[12px] font-Poppins leading-[1.35] text-white/90">
-                Invite your friends to play & we’ll give you N500 for each player
-              </div>
-            </div>
-            <div className="shrink-0">
-              <Image
-                src="/images/invite.png"
-                alt="Invite friends"
-                width={128}
-                height={96}
-                className="h-24 w-32 object-contain drop-shadow-[0_12px_20px_rgba(0,0,0,0.2)]"
-              />
-            </div>
-          </div>
-        </div>
+        <ReferralCard />
 
         {/* Win Modal */}
         {showModal && (

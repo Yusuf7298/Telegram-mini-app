@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { ArrowLeft, CreditCard, Landmark } from "lucide-react";
+import { ArrowLeft, BellIcon, CreditCard, Landmark } from "lucide-react";
 import { useRouter } from "next/navigation";
 
 const methods = [
@@ -48,24 +48,25 @@ export default function DepositPage() {
     }, 1200);
   };
 
+  function handleClick() {
+    router.back()
+  }
+
   const fieldClassName =
     'w-full rounded-2xl border border-white/10 bg-[#131c31] px-4 py-4 text-[14px] font-Poppins text-white outline-none placeholder:text-white/40 focus:border-[#18e0a8] focus:ring-2 focus:ring-[#18e0a8]/20';
 
   return (
     <div className="min-h-screen bg-gradient-to-bl from-[#2C5364] via-[#000000] to-[#020617] text-white pb-28">
       <div className="mx-auto flex min-h-screen max-w-[393px] flex-col bg-[radial-gradient(circle_at_top,_rgba(11,38,63,0.9),_rgba(0,6,18,1)_72%)]">
-        <div className="flex items-center justify-between px-4 pt-6 pb-4 border-b border-white/8">
-          <button
-            type="button"
-            onClick={() => router.back()}
-            className="flex h-14 w-14 items-center justify-center rounded-full border border-white/10 bg-white/5 text-white shadow-[0_8px_24px_rgba(0,0,0,0.35)] transition hover:bg-white/10"
-            aria-label="Go back"
-          >
-            <ArrowLeft className="h-5 w-5" />
-          </button>
-          <div className="text-[16px] font-bold font-Rubik tracking-[-0.03em]">Deposit</div>
-          <div className="h-14 w-14" />
-        </div>
+        <div className="flex items-center justify-between px-4 pt-6 pb-4 border-b border-gray-800">
+        <button onClick={handleClick} className="w-10 h-10 flex items-center justify-center rounded-full cursor-pointer bg-transparent border border-white/10 shadow text-white">
+          <ArrowLeft className="h-6 w-6" />
+        </button>
+        <div className="text-white font-bold text-[16px]">Deposit</div>
+        <button className="w-10 h-10 flex items-center justify-center rounded-full bg-white/10 text-white">
+          <BellIcon className="h-7 w-7 text-current m-2" />
+        </button>
+      </div>
         <div className="flex-1 px-4 pt-10">
           <div className="rounded-[28px] border border-white/10 bg-[#0b1526]/80 p-5 shadow-[0_18px_60px_rgba(0,0,0,0.35)] backdrop-blur-sm">
             <div className="mb-5 text-[16px] font-Rubik font-bold tracking-[-0.03em] text-white">
