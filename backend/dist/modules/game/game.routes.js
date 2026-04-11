@@ -2,8 +2,13 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const game_controller_1 = require("./game.controller");
-const game_rate_limit_middleware_1 = require("../../middleware/game-rate-limit.middleware");
+const rateLimitRedis_1 = require("../../middleware/rateLimitRedis");
+const replayProtection_middleware_1 = require("../../middleware/replayProtection.middleware");
+const validate_1 = require("../../middleware/validate");
+const game_validator_1 = require("../../validators/game.validator");
+const auth_middleware_1 = require("../../middleware/auth.middleware");
 const router = (0, express_1.Router)();
-router.post("/open-box", game_rate_limit_middleware_1.openBoxRateLimit, game_controller_1.openBoxController);
-router.post("/free-box", game_rate_limit_middleware_1.freeBoxRateLimit, game_controller_1.freeBoxController);
+router.get("/boxes", game_controller_1.getBoxesController);
+router.post("/open-box", auth_middleware_1.authMiddleware, rateLimitRedis_1.rateLimitRedisMiddleware, replayProtection_middleware_1.replayProtectionMiddleware, (0, validate_1.validateBody)(game_validator_1.openBoxSchema), game_controller_1.openBoxController);
+router.post("/free-box", auth_middleware_1.authMiddleware, rateLimitRedis_1.rateLimitRedisMiddleware, replayProtection_middleware_1.replayProtectionMiddleware, (0, validate_1.validateBody)(game_validator_1.freeBoxSchema), game_controller_1.freeBoxController);
 exports.default = router;

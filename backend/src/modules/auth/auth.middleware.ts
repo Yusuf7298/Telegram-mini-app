@@ -12,6 +12,6 @@ export async function authMiddleware(
     return res.status(401).json({ error: "Unauthorized" });
   }
 
-  req.userId = userId;
+  (req as Request & { userId?: string }).userId = userId;
   return next();
 }

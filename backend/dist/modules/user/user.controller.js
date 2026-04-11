@@ -1,9 +1,14 @@
 "use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.registerUser = registerUser;
 exports.getReferrals = getReferrals;
 exports.getCurrentUser = getCurrentUser;
 const db_1 = require("../../config/db");
+const crypto_1 = require("crypto");
+const crypto_2 = __importDefault(require("crypto"));
 function isValidString(value) {
     return typeof value === "string" && value.trim().length > 0;
 }
@@ -34,8 +39,21 @@ async function registerUser(req, res) {
             data: {
                 platformId,
                 username: isValidString(username) ? username : null,
-                referredBy: normalizedReferrerId,
-                wallet: { create: {} },
+                referralCode: `REF-${(0, crypto_1.randomUUID)().replace(/-/g, "").slice(0, 12)}`,
+                referredById: normalizedReferrerId,
+                deviceHash: crypto_2.default.createHash("sha256").update(`${req.ip || "unknown"}|${req.headers["user-agent"] || ""}|${platformId}`).digest("hex"),
+                createdIp: req.ip || "unknown",
+                lastLoginIp: req.ip || "unknown",
+                waitlistBonusEligible: false,
+                waitlistBonusGranted: false,
+                waitlistBonusUnlocked: false,
+                totalPlaysCount: 0,
+                wallet: {
+                    create: {
+                        bonusBalance: 0,
+                        bonusLocked: true,
+                    },
+                },
             },
         });
         return res.json({ success: true, data: user });

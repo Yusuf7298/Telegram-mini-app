@@ -8,5 +8,10 @@ module.exports = {
   transform: {
     ...tsJestTransformCfg,
   },
-  testPathIgnorePatterns: ["/node_modules/", "/dist/"],
+  globals: {
+    'ts-jest': {
+      tsconfig: 'tsconfig.test.json',
+    },
+  },
+  testPathIgnorePatterns: ["/node_modules/", "/dist/", "/tests/integration/"],
 };

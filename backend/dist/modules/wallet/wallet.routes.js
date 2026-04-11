@@ -2,6 +2,12 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const wallet_controller_1 = require("./wallet.controller");
+const validate_1 = require("../../middleware/validate");
+const wallet_validator_1 = require("../../validators/wallet.validator");
+const rateLimitRedis_1 = require("../../middleware/rateLimitRedis");
 const router = (0, express_1.Router)();
 router.get("/", wallet_controller_1.getWallet);
+router.get("/transactions", wallet_controller_1.getTransactions);
+router.post("/deposit", (0, validate_1.validateBody)(wallet_validator_1.walletAmountSchema), wallet_controller_1.depositToWallet);
+router.post("/withdraw", (0, validate_1.validateBody)(wallet_validator_1.walletAmountSchema), rateLimitRedis_1.rateLimitRedisMiddleware, wallet_controller_1.withdrawFromWallet);
 exports.default = router;

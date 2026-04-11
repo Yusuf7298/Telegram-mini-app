@@ -3,10 +3,23 @@ import { prisma } from "../../config/db";
 import { depositWallet, withdrawWallet } from "./wallet.service";
 import { Prisma } from '@prisma/client';
 
+function getRequestUserId(req: Request): string | undefined {
+  return (req as Request & { userId?: string }).userId;
+}
+
 
 function parsePositiveDecimal(value: unknown): Prisma.Decimal | null {
   try {
-    const decimal = new Prisma.Decimal(value);
+    const normalized =
+      typeof value === "number" || typeof value === "string"
+        ? value
+        : null;
+
+    if (normalized === null) {
+      return null;
+    }
+
+    const decimal = new Prisma.Decimal(normalized);
     if (decimal.lte(0)) return null;
     return decimal;
   } catch {
@@ -16,7 +29,7 @@ function parsePositiveDecimal(value: unknown): Prisma.Decimal | null {
 
 export async function getWallet(req: Request, res: Response) {
   try {
-    const userId = req.userId;
+    const userId = getRequestUserId(req);
     if (typeof userId !== "string" || !userId.trim()) {
       return res.status(400).json({ success: false, data: {}, error: "userId is required" });
     }
@@ -32,8 +45,9 @@ export async function getWallet(req: Request, res: Response) {
 
 export async function depositToWallet(req: Request, res: Response) {
   try {
-    const userId = req.userId;
+    const userId = getRequestUserId(req);
     const amount = parsePositiveDecimal(req.body?.amount);
+    const idempotencyKey = req.body?.idempotencyKey;
 
     if (typeof userId !== "string" || !userId.trim()) {
       return res.status(400).json({ success: false, error: "userId is required" });
@@ -43,7 +57,11 @@ export async function depositToWallet(req: Request, res: Response) {
       return res.status(400).json({ success: false, error: "Valid amount is required" });
     }
 
-    const wallet = await depositWallet(userId, amount);
+    if (typeof idempotencyKey !== "string" || !idempotencyKey.trim()) {
+      return res.status(400).json({ success: false, error: "idempotencyKey is required" });
+    }
+
+    const wallet = await depositWallet(userId, amount, idempotencyKey);
 
     return res.json({ success: true, data: wallet, error: null });
   } catch (err) {
@@ -54,8 +72,9 @@ export async function depositToWallet(req: Request, res: Response) {
 
 export async function withdrawFromWallet(req: Request, res: Response) {
   try {
-    const userId = req.userId;
+    const userId = getRequestUserId(req);
     const amount = parsePositiveDecimal(req.body?.amount);
+    const idempotencyKey = req.body?.idempotencyKey;
 
     if (typeof userId !== "string" || !userId.trim()) {
       return res.status(400).json({ success: false, error: "userId is required" });
@@ -65,7 +84,11 @@ export async function withdrawFromWallet(req: Request, res: Response) {
       return res.status(400).json({ success: false, error: "Valid amount is required" });
     }
 
-    const wallet = await withdrawWallet(userId, amount);
+    if (typeof idempotencyKey !== "string" || !idempotencyKey.trim()) {
+      return res.status(400).json({ success: false, error: "idempotencyKey is required" });
+    }
+
+    const wallet = await withdrawWallet(userId, amount, idempotencyKey);
 
     return res.json({ success: true, data: wallet, error: null });
   } catch (err) {
@@ -76,7 +99,7 @@ export async function withdrawFromWallet(req: Request, res: Response) {
 
 export async function getWalletTransactions(req: Request, res: Response) {
   try {
-    const userId = req.userId;
+    const userId = getRequestUserId(req);
 
     if (typeof userId !== "string" || !userId.trim()) {
       return res.status(400).json({ success: false, error: "userId is required" });
@@ -112,7 +135,7 @@ export async function getWalletTransactions(req: Request, res: Response) {
 
 export async function getTransactions(req: Request, res: Response) {
   try {
-    const userId = req.userId;
+    const userId = getRequestUserId(req);
     if (!userId) return res.status(401).json({ success: false, data: {}, error: "Unauthorized" });
     // Pagination
     const page = Math.max(1, parseInt(req.query.page as string) || 1);

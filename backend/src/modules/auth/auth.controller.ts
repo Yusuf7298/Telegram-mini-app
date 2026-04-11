@@ -3,27 +3,30 @@ import { authWithTelegram, generateToken } from "./auth.service";
 import { verifyTelegramData } from "./telegramAuth";
 import { AlertService } from "../../services/alert.service";
 
+const telegramFailCounts = new Map<string, number>();
+
+export async function telegramLogin(req: Request, res: Response) {
   try {
     const { initData } = req.body as { initData?: string };
     if (typeof initData !== "string" || !initData.trim()) {
       return res.status(400).json({ success: false, error: "initData is required" });
     }
 
-    // Track failed attempts by IP in-memory (could use Redis for distributed)
-    const ip = req.ip;
+    // Keep lightweight per-IP failure counters to detect brute force attempts.
+    const ip = req.ip || "unknown";
     const failKey = `tgfail:${ip}`;
-    if (!global.__tgFailCounts) global.__tgFailCounts = {};
-    const failCounts = global.__tgFailCounts;
 
     try {
       verifyTelegramData(initData);
-      // Reset fail count on success
-      if (failCounts[failKey]) failCounts[failKey] = 0;
+      telegramFailCounts.delete(failKey);
     } catch (authErr: unknown) {
-      failCounts[failKey] = (failCounts[failKey] || 0) + 1;
-      if (failCounts[failKey] > 3) {
-        await AlertService.failedTelegramAuth(null, ip, failCounts[failKey]);
+      const failedCount = (telegramFailCounts.get(failKey) || 0) + 1;
+      telegramFailCounts.set(failKey, failedCount);
+
+      if (failedCount > 3) {
+        await AlertService.failedTelegramAuth(null, ip, failedCount);
       }
+
       const authMessage = authErr instanceof Error ? authErr.message : "Invalid Telegram data";
       return res.status(401).json({ success: false, error: authMessage });
     }

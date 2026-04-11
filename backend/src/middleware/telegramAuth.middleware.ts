@@ -39,10 +39,21 @@ export async function verifyTelegramAuth(req: Request, res: Response, next: Next
     }
     const telegramUserId = String(telegramUser.id);
     // User rules: platformId must equal Telegram user id
-    const user = await findOrCreateTelegramUser(telegramUserId, telegramUser.username, telegramUser);
+    const user = await findOrCreateTelegramUser(
+      telegramUserId,
+      telegramUser.username,
+      telegramUser,
+      req.ip,
+      (req.headers["x-device-id"] as string | undefined) || undefined,
+      req.headers["user-agent"] as string | undefined
+    );
+    if (!user) {
+      await logSuspiciousLoginAttempt({ reason: "User bootstrap failed", telegramUserId });
+      return res.status(500).json({ success: false, error: "User setup failed" });
+    }
     // Attach user info to request context
     (req as any).user = user;
-    req.userId = user.platformId;
+    (req as Request & { userId?: string }).userId = user.platformId;
     next();
   } catch (err) {
     await logSuspiciousLoginAttempt({ reason: "Internal error", error: err?.toString() });
@@ -54,8 +65,9 @@ async function logSuspiciousLoginAttempt(details: any) {
   try {
     await prisma.suspiciousActionLog.create({
       data: {
-        type: "telegram_login_attempt",
-        metadata: details,
+        userId: "system",
+        action: "telegram_login_attempt",
+        details: JSON.stringify(details),
       },
     });
   } catch {}

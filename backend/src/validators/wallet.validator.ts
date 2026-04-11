@@ -12,6 +12,7 @@ export const walletAmountSchema = z.object({
     .refine((val) => val.length <= 16, {
       message: "Amount too large",
     }),
+  idempotencyKey: z.string().min(8).max(64).regex(/^[a-zA-Z0-9_-]+$/),
 }).strict();
 
 export type WalletAmountInput = z.infer<typeof walletAmountSchema>;

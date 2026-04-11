@@ -8,7 +8,7 @@ export function validateBody(schema: ZodSchema<any>) {
       return res.status(400).json({
         success: false,
         error: "Validation error",
-        details: result.error.errors.map(e => ({
+        details: result.error.issues.map((e) => ({
           path: e.path.join("."),
           message: e.message,
         })),
@@ -26,7 +26,7 @@ export function validateQuery(schema: ZodSchema<any>) {
       return res.status(400).json({
         success: false,
         error: "Validation error",
-        details: result.error.errors.map(e => ({
+        details: result.error.issues.map((e) => ({
           path: e.path.join("."),
           message: e.message,
         })),

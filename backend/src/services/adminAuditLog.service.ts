@@ -1,4 +1,7 @@
 // NEW: AdminAuditLog for admin actions
+import { Prisma } from '@prisma/client';
+import { prisma } from '../config/db';
+
 export async function logAdminAudit({
   adminId,
   action,
@@ -12,17 +15,19 @@ export async function logAdminAudit({
   metadata?: any;
   tx?: Prisma.TransactionClient;
 }) {
-  const client = tx || new PrismaClient();
+  const client = tx || prisma;
   await client.adminAuditLog.create({
     data: {
-      adminId,
       action,
-      targetUserId,
-      metadata: metadata ? JSON.stringify(metadata) : undefined,
+      entity: "User",
+      entityId: targetUserId,
+      data: {
+        adminId,
+        metadata: metadata || null,
+      },
     },
   });
 }
-import { Prisma, PrismaClient } from '@prisma/client';
 
 export async function logAdminAction(
   action: string,

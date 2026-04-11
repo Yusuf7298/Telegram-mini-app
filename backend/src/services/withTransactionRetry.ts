@@ -10,8 +10,11 @@ export async function withRetry<T>(fn: () => Promise<T>, retries = 3): Promise<T
       const code = err.code || err?.meta?.code;
       const isDeadlock = code === '40001' || code === '40P01';
       const isTransient = code === '57014' || code === '57P01' || code === '53300' || code === '55000';
+      const isPrismaTxTimeout =
+        code === 'P2028' ||
+        /transaction api error/i.test(String(err?.message || ''));
       const isUpdateManyZero = err.message && /update.*count.*0/i.test(err.message);
-      if (isDeadlock || isTransient || isUpdateManyZero) {
+      if (isDeadlock || isTransient || isPrismaTxTimeout || isUpdateManyZero) {
         attempt++;
         if (attempt >= retries) throw err;
         await new Promise((res) => setTimeout(res, delay));
@@ -30,5 +33,12 @@ export async function withTransactionRetry<T>(
   fn: (tx: any) => Promise<T>,
   maxRetries = 3
 ): Promise<T> {
-  return withRetry(() => prisma.$transaction(async (tx) => fn(tx)), maxRetries);
+  return withRetry(
+    () =>
+      prisma.$transaction(async (tx) => fn(tx), {
+        maxWait: 10000,
+        timeout: 15000,
+      }),
+    maxRetries
+  );
 }

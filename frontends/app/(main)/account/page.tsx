@@ -124,7 +124,7 @@ export default function AccountPage() {
 
         <div className="mt-6 flex items-center gap-2 px-1">
           <Bell className="h-7 w-7 text-[#18e0a8]" fill="currentColor" />
-          <span className="text-[24px] font-extrabold font-Rubik tracking-[-0.03em]">NOTIFICATIONS</span>
+          <span className="text-[20px] font-bold font-Rubik tracking-[-0.03em]">NOTIFICATIONS</span>
         </div>
 
         <div className="mt-4 overflow-hidden rounded-[28px] border border-white/10 bg-[#111a30] px-4 py-4 shadow-[0_18px_60px_rgba(0,0,0,0.35)]">
@@ -164,8 +164,8 @@ export default function AccountPage() {
               <col className="w-[88px]" />
             </colgroup>
             <thead>
-              <tr className="text-left text-[16px] font-bold font-Rubik text-white/55">
-                <th className="px-4">Username</th>
+              <tr className="text-left text-[12px] font-bold font-Rubik text-white/55">
+                <th className="px-0">Username</th>
                 <th className="px-4">Joined</th>
                 <th className="px-4">Status</th>
                 <th className="px-4">Earning</th>
@@ -175,7 +175,7 @@ export default function AccountPage() {
               {referrals.map((item, index) => (
                 <tr
                   key={`${item.username}-${index}`}
-                  className={`text-[16px] font-Poppins text-white/80 ${index % 2 === 0 ? 'bg-[#1a2238]' : 'bg-transparent'}`}
+                  className={`text-[12px] font-Poppins text-white/80 ${index % 2 === 0 ? 'bg-[#1a2238]' : 'bg-transparent'}`}
                 >
                   <td className="truncate rounded-l-2xl px-4 py-4">{item.username}</td>
                   <td className="whitespace-nowrap px-4 py-4">{item.joined}</td>

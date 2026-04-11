@@ -1,65 +1,25 @@
-import axios, { AxiosInstance, AxiosRequestConfig } from 'axios';
-
-// --- API Base URL ---
-const api: AxiosInstance = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_API_URL || 'https://api.boxplay.app',
-  headers: {
-    'Content-Type': 'application/json',
-  },
-});
-
-// --- Types ---
-export interface LoginRequest {
-  phone: string;
-  password: string;
-}
-export interface LoginResponse {
-  token: string;
-  user: User;
-}
-
-export interface SignupRequest {
-  phone: string;
-  password: string;
-  referralCode?: string;
-}
-export interface SignupResponse {
-  token: string;
-  user: User;
-}
-
-export interface VerifyOtpRequest {
-  phone: string;
-  otp: string;
-}
-export interface VerifyOtpResponse {
-  token: string;
-  user: User;
-}
+import { AxiosRequestConfig } from 'axios';
+import api from './api';
 
 export interface OpenBoxRequest {
-  boxType: string;
+  boxId: string;
+  idempotencyKey: string;
 }
 export interface OpenBoxResponse {
-  prize: Prize;
-  box: Box;
+  success: boolean;
+  data: unknown;
+  error: string | null;
 }
 
 export interface WalletResponse {
-  balance: number;
-  transactions: Transaction[];
-}
-
-export interface RewardsResponse {
-  rewards: Reward[];
-}
-
-export interface LeaderboardResponse {
-  leaderboard: LeaderboardEntry[];
-}
-
-export interface ReferralsResponse {
-  referrals: Referral[];
+  success: boolean;
+  data: {
+    id: string;
+    userId: string;
+    cashBalance: number;
+    bonusBalance: number;
+  };
+  error: string | null;
 }
 
 // --- Entity Types ---
@@ -86,49 +46,14 @@ export interface Transaction {
   type: string;
   createdAt: string;
 }
-export interface Reward {
-  id: string;
-  name: string;
-  value: number;
-  claimed: boolean;
-}
-export interface LeaderboardEntry {
-  user: User;
-  prize: Prize;
-  wonAt: string;
-}
-export interface Referral {
-  id: string;
-  referredUser: User;
-  reward: number;
-  joinedAt: string;
-}
 
 // --- API Service ---
 const ApiService = {
-  login: (data: LoginRequest, config?: AxiosRequestConfig) =>
-    api.post<LoginResponse>('/auth/login', data, config),
-
-  signup: (data: SignupRequest, config?: AxiosRequestConfig) =>
-    api.post<SignupResponse>('/auth/signup', data, config),
-
-  verifyOtp: (data: VerifyOtpRequest, config?: AxiosRequestConfig) =>
-    api.post<VerifyOtpResponse>('/auth/verify-otp', data, config),
-
   openBox: (data: OpenBoxRequest, config?: AxiosRequestConfig) =>
-    api.post<OpenBoxResponse>('/boxes/open', data, config),
+    api.post<OpenBoxResponse>('/game/open-box', data, config),
 
   getWallet: (config?: AxiosRequestConfig) =>
     api.get<WalletResponse>('/wallet', config),
-
-  getRewards: (config?: AxiosRequestConfig) =>
-    api.get<RewardsResponse>('/rewards', config),
-
-  getLeaderboard: (config?: AxiosRequestConfig) =>
-    api.get<LeaderboardResponse>('/leaderboard', config),
-
-  getReferrals: (config?: AxiosRequestConfig) =>
-    api.get<ReferralsResponse>('/referrals', config),
 };
 
 export default ApiService;

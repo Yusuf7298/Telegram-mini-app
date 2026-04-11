@@ -2,66 +2,57 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.openBoxController = openBoxController;
 exports.freeBoxController = freeBoxController;
+exports.getBoxesController = getBoxesController;
 const game_service_1 = require("./game.service");
-function isValidString(value) {
-    return typeof value === "string" && value.trim().length > 0;
+const apiResponse_1 = require("../../utils/apiResponse");
+function getRequestUserId(req) {
+    return req.userId;
 }
 async function openBoxController(req, res) {
     try {
         const { boxId, idempotencyKey } = req.body;
-        const userId = req.userId;
-        if (!isValidString(userId)) {
-            return res.status(400).json({
-                success: false,
-                error: "userId is required",
-            });
+        const userId = getRequestUserId(req);
+        if (!userId) {
+            return res.status(400).json((0, apiResponse_1.errorResponse)("userId is required"));
         }
-        if (!isValidString(boxId)) {
-            return res.status(400).json({
-                success: false,
-                error: "boxId is required",
-            });
+        if (!boxId) {
+            return res.status(400).json((0, apiResponse_1.errorResponse)("boxId is required"));
         }
-        if (!isValidString(idempotencyKey)) {
-            return res.status(400).json({
-                success: false,
-                error: "idempotencyKey is required",
-            });
+        if (!idempotencyKey) {
+            return res.status(400).json((0, apiResponse_1.errorResponse)("idempotencyKey is required"));
         }
-        const reward = await (0, game_service_1.openBox)(userId, boxId, idempotencyKey);
-        return res.json({
-            success: true,
-            data: { reward },
-        });
+        const reward = await (0, game_service_1.openBox)(userId, boxId, idempotencyKey, req.ip, req.headers["x-device-id"]);
+        return res.json((0, apiResponse_1.successResponse)(reward));
     }
     catch (err) {
         const message = err instanceof Error ? err.message : "Something went wrong";
-        return res.status(400).json({
-            success: false,
-            error: message,
-        });
+        return res.status(400).json((0, apiResponse_1.errorResponse)(message));
     }
 }
 async function freeBoxController(req, res) {
     try {
-        const userId = req.userId;
-        if (!isValidString(userId)) {
-            return res.status(400).json({
-                success: false,
-                error: "userId is required",
-            });
+        const userId = getRequestUserId(req);
+        const { idempotencyKey } = req.body;
+        if (!userId) {
+            return res.status(400).json((0, apiResponse_1.errorResponse)("userId is required"));
         }
-        const reward = await (0, game_service_1.openFreeBox)(userId);
-        return res.json({
-            success: true,
-            data: { reward },
-        });
+        if (!idempotencyKey) {
+            return res.status(400).json((0, apiResponse_1.errorResponse)("idempotencyKey is required"));
+        }
+        const freeBoxResult = await (0, game_service_1.openFreeBox)(userId, idempotencyKey, req.ip, req.headers["x-device-id"]);
+        return res.json((0, apiResponse_1.successResponse)(freeBoxResult));
     }
     catch (err) {
         const message = err instanceof Error ? err.message : "Something went wrong";
-        return res.status(400).json({
-            success: false,
-            error: message,
-        });
+        return res.status(400).json((0, apiResponse_1.errorResponse)(message));
+    }
+}
+async function getBoxesController(_req, res) {
+    try {
+        const boxes = await (0, game_service_1.getBoxes)();
+        return res.json((0, apiResponse_1.successResponse)(boxes));
+    }
+    catch {
+        return res.status(500).json((0, apiResponse_1.errorResponse)("Failed to load boxes"));
     }
 }

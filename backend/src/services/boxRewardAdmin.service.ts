@@ -1,4 +1,4 @@
-import { Prisma, PrismaClient } from '@prisma/client';
+import { prisma } from '../config/db';
 import { validateBoxRewardInput } from './validation';
 import { logAdminAction } from './adminAuditLog.service';
 
@@ -12,10 +12,7 @@ function computeExpectedValue(rewards: { reward: any, weight: any }[], boxPrice:
   }
   return expected;
 }
-
-const prisma = new PrismaClient();
-
-export async function createBoxReward(data: Prisma.BoxRewardCreateInput, tx: any) {
+export async function createBoxReward(data: any, tx: any) {
   validateBoxRewardInput(data);
   // Fetch all rewards for this box (including the new one)
   const boxId = data.boxId;
@@ -32,7 +29,7 @@ export async function createBoxReward(data: Prisma.BoxRewardCreateInput, tx: any
   return filterBoxReward(reward);
 }
 
-export async function updateBoxReward(id: string, data: Prisma.BoxRewardUpdateInput, tx: any) {
+export async function updateBoxReward(id: string, data: any, tx: any) {
   validateBoxRewardInput(data);
   // Fetch all rewards for this box (with this one updated)
   const oldReward = await tx.boxReward.findUnique({ where: { id } });
@@ -41,7 +38,7 @@ export async function updateBoxReward(id: string, data: Prisma.BoxRewardUpdateIn
   const box = await tx.box.findUnique({ where: { id: boxId } });
   if (!box) throw new Error('Box not found');
   const rewards = await tx.boxReward.findMany({ where: { boxId } });
-  const updatedRewards = rewards.map(r => r.id === id ? { ...r, ...data } : r);
+  const updatedRewards = rewards.map((r: any) => (r.id === id ? { ...r, ...data } : r));
   const expected = computeExpectedValue(updatedRewards, Number(box.price));
   if (expected > Number(box.price) * 0.75) {
     throw new Error(`Expected value (₦${expected.toFixed(2)}) exceeds 75% of box price (₦${box.price})`);

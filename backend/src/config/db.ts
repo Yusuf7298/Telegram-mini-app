@@ -22,4 +22,6 @@ async function logDbUser() {
 		console.error("Could not verify DB user:", err);
 	}
 }
-logDbUser();
+if (process.env.NODE_ENV !== "test") {
+	logDbUser();
+}

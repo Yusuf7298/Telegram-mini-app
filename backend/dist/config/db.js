@@ -10,3 +10,17 @@ if (!connectionString) {
 }
 const adapter = new adapter_pg_1.PrismaPg({ connectionString });
 exports.prisma = new client_1.PrismaClient({ adapter });
+// Startup log and runtime check for DB user
+async function logDbUser() {
+    try {
+        const result = await exports.prisma.$queryRaw `SELECT current_user`;
+        const user = Array.isArray(result) && result[0]?.current_user ? result[0].current_user : JSON.stringify(result);
+        console.log("DB running as restricted app_user:", user);
+    }
+    catch (err) {
+        console.error("Could not verify DB user:", err);
+    }
+}
+if (process.env.NODE_ENV !== "test") {
+    logDbUser();
+}

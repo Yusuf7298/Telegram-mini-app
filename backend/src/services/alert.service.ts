@@ -36,4 +36,10 @@ export class AlertService {
     await logAudit({ userId, action: "alert_referral_farming", details: { count } });
     // Future: sendSlack, sendEmail, sendWebhook
   }
+
+  // Log and trigger alert for repeated wins anomaly
+  static async repeatedWins(userId: string, winCount: number, total: number) {
+    await logAudit({ userId, action: "alert_repeated_wins", details: { winCount, total } });
+    // Future: sendSlack, sendEmail, sendWebhook
+  }
 }

@@ -3,7 +3,8 @@ import { Request, Response, NextFunction } from 'express';
 
 // Hardened admin auth: require admin role AND secondary secret
 export function requireAdminAuth(req: Request, res: Response, next: NextFunction) {
-  if (!req.user || req.user.role !== 'ADMIN') {
+  const requestUser = (req as Request & { user?: { role?: string } }).user;
+  if (!requestUser || requestUser.role !== 'ADMIN') {
     return res.status(403).json({ error: 'Admin access required' });
   }
   // Require secondary secret (env key)

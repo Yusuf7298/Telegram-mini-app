@@ -6,10 +6,13 @@ const vault_service_1 = require("./vault.service");
 function isValidString(value) {
     return typeof value === "string" && value.trim().length > 0;
 }
+function getRequestUserId(req) {
+    return req.userId;
+}
 async function claimVaultController(req, res) {
     try {
         const { vaultId } = req.body;
-        const userId = req.userId;
+        const userId = getRequestUserId(req);
         if (!isValidString(userId) || !isValidString(vaultId)) {
             return res
                 .status(400)
@@ -25,7 +28,7 @@ async function claimVaultController(req, res) {
 }
 async function getUserVaultProgressController(req, res) {
     try {
-        const userId = req.userId;
+        const userId = getRequestUserId(req);
         if (!isValidString(userId)) {
             return res.status(400).json({ success: false, error: "userId is required" });
         }

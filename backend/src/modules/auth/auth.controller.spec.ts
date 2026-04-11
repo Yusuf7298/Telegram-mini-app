@@ -13,6 +13,12 @@ jest.mock("./telegramAuth", () => ({
   verifyTelegramData: (...args: unknown[]) => mockVerifyTelegramData(...args),
 }));
 
+jest.mock("../../services/alert.service", () => ({
+  AlertService: {
+    failedTelegramAuth: jest.fn(),
+  },
+}));
+
 import { telegramLogin } from "./auth.controller";
 
 function createResponseMock() {

@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import { requireAdmin } from '../../middleware/auth.middleware';
+import { requireAdminAuth } from '../../middleware/adminAuth';
 import {
+  getMetrics,
   createReward,
   updateReward,
   deleteReward,
@@ -9,6 +11,9 @@ import {
   unfreezeUserHandler,
   revokeRewardHandler,
   verifySystemIntegrityHandler,
+  freezeUser,
+  revokeReward,
+  updateConfig,
 } from './admin.controller';
 import { validateBody } from "../../middleware/validate";
 import { adminActionSchema } from "../../validators/admin.validator";
@@ -25,6 +30,7 @@ router.get('/admin/rewards/:boxId', requireAdminAuth, listRewardsByBox);
 router.post('/admin/freeze', requireAdminAuth, validateBody(adminActionSchema), freezeUserHandler);
 router.post('/admin/unfreeze', requireAdminAuth, validateBody(adminActionSchema), unfreezeUserHandler);
 router.post('/admin/revoke', requireAdminAuth, validateBody(adminActionSchema), revokeRewardHandler);
+router.get('/admin/integrity', requireAdminAuth, verifySystemIntegrityHandler);
 
 // NEW: User endpoints
 router.post('/user/freeze', requireAdmin, freezeUser);

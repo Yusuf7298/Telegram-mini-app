@@ -1,8 +1,11 @@
-declare global {
-  namespace Express {
-    interface Request {
-      userId: string;
-    }
+declare module "express-serve-static-core" {
+  interface Request {
+    userId?: string;
+    user?: {
+      id?: string;
+      role?: string;
+    };
+    tx?: unknown;
   }
 }
 

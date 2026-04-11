@@ -1,0 +1,11 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = require("express");
+const referral_controller_1 = require("./referral.controller");
+const telegramAuth_middleware_1 = require("../../middleware/telegramAuth.middleware");
+const validate_1 = require("../../middleware/validate");
+const referral_validator_1 = require("../../validators/referral.validator");
+const router = (0, express_1.Router)();
+router.get("/code", telegramAuth_middleware_1.verifyTelegramAuth, referral_controller_1.getReferralCode);
+router.post("/use", telegramAuth_middleware_1.verifyTelegramAuth, (0, validate_1.validateBody)(referral_validator_1.referralCodeSchema), referral_controller_1.useReferralCode);
+exports.default = router;

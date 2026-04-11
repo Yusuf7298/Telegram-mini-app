@@ -1,14 +1,18 @@
 import { Request, Response } from "express";
 import { claimVault, getUserVaultProgress } from "./vault.service";
 
-function isValidString(value: unknown) {
+function isValidString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+function getRequestUserId(req: Request): string | undefined {
+  return (req as Request & { userId?: string }).userId;
 }
 
 export async function claimVaultController(req: Request, res: Response) {
   try {
     const { vaultId } = req.body;
-    const userId = req.userId;
+    const userId = getRequestUserId(req);
 
     if (!isValidString(userId) || !isValidString(vaultId)) {
       return res
@@ -30,7 +34,7 @@ export async function getUserVaultProgressController(
   res: Response
 ) {
   try {
-    const userId = req.userId;
+    const userId = getRequestUserId(req);
 
     if (!isValidString(userId)) {
       return res.status(400).json({ success: false, error: "userId is required" });

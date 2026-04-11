@@ -1,5 +1,7 @@
 import { Request, Response } from "express";
 import { prisma } from "../../config/db";
+import { randomUUID } from "crypto";
+import crypto from "crypto";
 
 type AuthenticatedRequest = Request & { userId?: string };
 
@@ -40,8 +42,21 @@ export async function registerUser(req: Request, res: Response) {
       data: {
         platformId,
         username: isValidString(username) ? username : null,
-        referredBy: normalizedReferrerId,
-        wallet: { create: {} },
+        referralCode: `REF-${randomUUID().replace(/-/g, "").slice(0, 12)}`,
+        referredById: normalizedReferrerId,
+        deviceHash: crypto.createHash("sha256").update(`${req.ip || "unknown"}|${req.headers["user-agent"] || ""}|${platformId}`).digest("hex"),
+        createdIp: req.ip || "unknown",
+        lastLoginIp: req.ip || "unknown",
+        waitlistBonusEligible: false,
+        waitlistBonusGranted: false,
+        waitlistBonusUnlocked: false,
+        totalPlaysCount: 0,
+        wallet: {
+          create: {
+            bonusBalance: 0,
+            bonusLocked: true,
+          },
+        },
       },
     });
 

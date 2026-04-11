@@ -16,7 +16,7 @@ const parsed = envSchema.safeParse(process.env);
 if (!parsed.success) {
   // Print all validation errors and exit
   console.error('❌ Invalid environment configuration:');
-  for (const err of parsed.error.errors) {
+  for (const err of parsed.error.issues) {
     console.error(`- ${err.message}`);
   }
   process.exit(1);

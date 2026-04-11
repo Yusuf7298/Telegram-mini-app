@@ -20,7 +20,7 @@ export async function depositCash(userId: string, amount: Prisma.Decimal, idempo
       idempKey = await createIdempotencyKey({ id: idempotencyKey, userId, action: "depositCash", tx });
     } catch (err: any) {
       idempKey = await checkIdempotencyKey({ id: idempotencyKey, userId, tx });
-      if (idempKey && idempKey.status === "COMPLETED" && idempKey.response) return idempKey.response;
+      if (idempKey && idempKey.status === "COMPLETED") return idempKey.rewardAmount;
       throw err;
     }
     const wallet = await getWallet(tx, userId);
@@ -31,7 +31,7 @@ export async function depositCash(userId: string, amount: Prisma.Decimal, idempo
     await tx.transaction.create({
       data: {
         userId,
-        type: "DEPOSIT",
+        type: "BOX_REWARD",
         amount,
         balanceBefore: before,
         balanceAfter: updated.cashBalance.plus(updated.bonusBalance),
@@ -52,7 +52,7 @@ export async function spendCash(userId: string, amount: Prisma.Decimal, idempote
       idempKey = await createIdempotencyKey({ id: idempotencyKey, userId, action: "spendCash", tx });
     } catch (err: any) {
       idempKey = await checkIdempotencyKey({ id: idempotencyKey, userId, tx });
-      if (idempKey && idempKey.status === "COMPLETED" && idempKey.response) return idempKey.response;
+      if (idempKey && idempKey.status === "COMPLETED") return idempKey.rewardAmount;
       throw err;
     }
     const wallet = await getWallet(tx, userId);
@@ -64,7 +64,7 @@ export async function spendCash(userId: string, amount: Prisma.Decimal, idempote
     await tx.transaction.create({
       data: {
         userId,
-        type: "WITHDRAW",
+        type: "BOX_PURCHASE",
         amount: amount.neg(),
         balanceBefore: before,
         balanceAfter: updated.cashBalance.plus(updated.bonusBalance),
@@ -85,7 +85,7 @@ export async function creditBonus(userId: string, amount: Prisma.Decimal, idempo
       idempKey = await createIdempotencyKey({ id: idempotencyKey, userId, action: "creditBonus", tx });
     } catch (err: any) {
       idempKey = await checkIdempotencyKey({ id: idempotencyKey, userId, tx });
-      if (idempKey && idempKey.status === "COMPLETED" && idempKey.response) return idempKey.response;
+      if (idempKey && idempKey.status === "COMPLETED") return idempKey.rewardAmount;
       throw err;
     }
     const wallet = await getWallet(tx, userId);
@@ -96,7 +96,7 @@ export async function creditBonus(userId: string, amount: Prisma.Decimal, idempo
     await tx.transaction.create({
       data: {
         userId,
-        type: "BONUS",
+        type: "WELCOME_BONUS",
         amount,
         balanceBefore: before,
         balanceAfter: updated.cashBalance.plus(updated.bonusBalance),
@@ -117,7 +117,7 @@ export async function creditCash(userId: string, amount: Prisma.Decimal, idempot
       idempKey = await createIdempotencyKey({ id: idempotencyKey, userId, action: "creditCash", tx });
     } catch (err: any) {
       idempKey = await checkIdempotencyKey({ id: idempotencyKey, userId, tx });
-      if (idempKey && idempKey.status === "COMPLETED" && idempKey.response) return idempKey.response;
+      if (idempKey && idempKey.status === "COMPLETED") return idempKey.rewardAmount;
       throw err;
     }
     const wallet = await getWallet(tx, userId);
@@ -128,7 +128,7 @@ export async function creditCash(userId: string, amount: Prisma.Decimal, idempot
     await tx.transaction.create({
       data: {
         userId,
-        type: "CREDIT",
+        type: "BOX_REWARD",
         amount,
         balanceBefore: before,
         balanceAfter: updated.cashBalance.plus(updated.bonusBalance),

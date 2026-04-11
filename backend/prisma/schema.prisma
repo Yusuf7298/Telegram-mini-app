@@ -34,9 +34,21 @@ model User {
   username             String?
   referralCode         String   @unique
   referredById         String?
+  deviceHash           String?
+  createdIp            String   @default("unknown")
+  lastLoginIp          String   @default("unknown")
+  riskScore            Int      @default(0)
+  waitlistBonusEligible Boolean @default(true)
+  accountStatus        String   @default("ACTIVE")
+  lastPlayTimestamp    DateTime?
+  signupIp             String?
+  signupDeviceId       String?
   referralCount        Int      @default(0)
   freeBoxUsed          Boolean  @default(false)
   paidBoxesOpened      Int      @default(0)
+  totalPlaysCount      Int      @default(0)
+  waitlistBonusGranted Boolean  @default(false)
+  waitlistBonusUnlocked Boolean @default(false)
   welcomeBonusUnlocked Boolean  @default(false)
   createdAt            DateTime @default(now())
   referralRewardPending Boolean @default(false)
@@ -56,6 +68,9 @@ model User {
   rewardRevokes  RewardRevocation[]
   referredBy User?  @relation("UserReferredBy", fields: [referredById], references: [id])
   referrals  User[] @relation("UserReferredBy")
+  @@index([createdIp])
+  @@index([deviceHash])
+  @@index([riskScore])
 }
 
 model Wallet {
@@ -130,6 +145,7 @@ model IdempotencyKey {
   userId       String
   boxId        String
   rewardAmount Decimal  @db.Decimal(10, 2)
+  response     Json?
   createdAt    DateTime @default(now())
   action    String
   status    String    @default("pending")
@@ -204,6 +220,28 @@ model RewardRevocation {
   reason    String?
 
   user User @relation(fields: [userId], references: [id])
+}
+
+model AdminAuditLog {
+  id        String   @id @default(uuid())
+  action    String
+  entity    String
+  entityId  String?
+  data      Json?
+  createdAt DateTime @default(now())
+}
+
+model SystemStats {
+  id               String  @id @default("global")
+  totalIn          Decimal @default(0)
+  totalOut         Decimal @default(0)
+  totalBoxesOpened Int     @default(0)
+  jackpotWins      Int     @default(0)
+}
+
+model GameConfig {
+  id          String @id @default("global")
+  rtpModifier Float  @default(1)
 }
 
 model TelegramAuthLog {

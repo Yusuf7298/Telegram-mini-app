@@ -55,10 +55,10 @@ app.get("/", (req, res) => {
 
 app.use("/api/auth", authRoutes);
 app.use("/api", adminRoutes);
-app.use("/api/user", userRoutes);
-app.use("/api/wallet", walletRoutes);
+app.use("/api/user", authMiddleware, userRoutes);
+app.use("/api/wallet", authMiddleware, walletRoutes);
 app.use("/api/game", gameRoutes);
-app.use("/api/vault", vaultRoutes);
+app.use("/api/vault", authMiddleware, vaultRoutes);
 app.use("/api/referral", referralRoutes);
 
 app.get("/test", async (req, res) => {

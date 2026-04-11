@@ -13,9 +13,11 @@ export const useWalletStore = create<WalletState>((set) => ({
   fetchWallet: async () => {
     try {
       const { data } = await ApiService.getWallet();
+      const wallet = data.data;
+
       set({
-        cashBalance: data.balance,
-        bonusBalance: data.transactions?.find((t) => t.type === 'bonus')?.amount || 0,
+        cashBalance: wallet?.cashBalance ?? 0,
+        bonusBalance: wallet?.bonusBalance ?? 0,
       });
     } catch (e) {
       // handle error

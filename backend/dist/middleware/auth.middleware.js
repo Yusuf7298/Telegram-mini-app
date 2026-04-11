@@ -4,6 +4,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.authMiddleware = authMiddleware;
+exports.requireAdmin = requireAdmin;
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 async function authMiddleware(req, res, next) {
     const authHeader = req.headers.authorization;
@@ -28,5 +29,27 @@ async function authMiddleware(req, res, next) {
     }
     catch {
         return res.status(401).json({ success: false, error: "Unauthorized" });
+    }
+}
+function requireAdmin(req, res, next) {
+    const authHeader = req.headers.authorization;
+    if (!authHeader?.startsWith('Bearer ')) {
+        return res.status(401).json({ error: 'Unauthorized' });
+    }
+    const token = authHeader.split(' ')[1];
+    const secret = process.env.JWT_SECRET;
+    if (!secret) {
+        return res.status(500).json({ error: 'Auth is not configured' });
+    }
+    try {
+        const payload = jsonwebtoken_1.default.verify(token, secret);
+        if (payload.role !== 'admin') {
+            return res.status(403).json({ error: 'Forbidden: Admins only' });
+        }
+        req.user = payload;
+        next();
+    }
+    catch {
+        return res.status(401).json({ error: 'Invalid token' });
     }
 }

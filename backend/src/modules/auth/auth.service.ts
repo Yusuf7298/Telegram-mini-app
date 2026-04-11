@@ -1,5 +1,8 @@
 import jwt from "jsonwebtoken";
 import { prisma } from "../../config/db";
+import { randomUUID } from "crypto";
+
+const WAITLIST_BONUS_AMOUNT = 1000;
 
 type TelegramUserPayload = {
   id?: number | string;
@@ -28,12 +31,23 @@ export async function authWithTelegram(initData: string) {
       ? userData.username
       : null;
 
+  const referralCode = `REF-${randomUUID().replace(/-/g, "").slice(0, 12)}`;
+
   return prisma.user.upsert({
     where: { platformId },
     create: {
       platformId,
       username,
-      wallet: { create: {} },
+      referralCode,
+      waitlistBonusGranted: true,
+      waitlistBonusUnlocked: false,
+      totalPlaysCount: 0,
+      wallet: {
+        create: {
+          bonusBalance: WAITLIST_BONUS_AMOUNT,
+          bonusLocked: true,
+        },
+      },
     },
     update: {
       username,

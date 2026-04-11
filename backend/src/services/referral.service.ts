@@ -2,7 +2,7 @@
 import { prisma } from "../config/db";
 import { Prisma } from "@prisma/client";
 
-const MAX_REFERRALS_PER_IP_PER_DAY = 3;
+const MAX_REFERRALS_PER_IP_PER_DAY = 5;
 
 export async function logReferral({
   referrerId,
@@ -28,20 +28,53 @@ export async function logReferral({
 export async function checkReferralLimits({
   ip,
   deviceId,
+  referrerId,
+  referredId,
   tx,
 }: {
   ip: string;
   deviceId?: string;
+  referrerId?: string;
+  referredId?: string;
   tx?: Prisma.TransactionClient;
 }) {
   const client = tx || prisma;
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-  const count = await client.referralLog.count({
+  const countByIp = await client.referralLog.count({
     where: {
       ip,
-      deviceId,
       createdAt: { gte: since },
     },
   });
-  return count < MAX_REFERRALS_PER_IP_PER_DAY;
+
+  if (countByIp >= MAX_REFERRALS_PER_IP_PER_DAY) {
+    return false;
+  }
+
+  if (referrerId && referredId) {
+    const [referrer, referred] = await Promise.all([
+      client.user.findUnique({ where: { id: referrerId }, select: { deviceHash: true, createdIp: true } }),
+      client.user.findUnique({ where: { id: referredId }, select: { deviceHash: true, createdIp: true } }),
+    ]);
+
+    if (!referrer || !referred) return false;
+    if (referrer.createdIp === referred.createdIp) return false;
+    if (referrer.deviceHash && referred.deviceHash && referrer.deviceHash === referred.deviceHash) {
+      return false;
+    }
+  }
+
+  if (deviceId) {
+    const countByDevice = await client.referralLog.count({
+      where: {
+        deviceId,
+        createdAt: { gte: since },
+      },
+    });
+    if (countByDevice >= MAX_REFERRALS_PER_IP_PER_DAY) {
+      return false;
+    }
+  }
+
+  return true;
 }

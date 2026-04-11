@@ -15,6 +15,7 @@ interface TelegramWebApp {
   expand?: () => void;
   disableClosingConfirmation?: () => void;
   setSwipeBackAllowed?: (allowed: boolean) => void;
+  initData?: string;
   initDataUnsafe?: {
     user?: TelegramUser;
   };
@@ -40,6 +41,17 @@ export function getTelegramUser(): TelegramUser | null {
   if (tg && tg.initDataUnsafe?.user) {
     return tg.initDataUnsafe.user as TelegramUser;
   }
+  return null;
+}
+
+export function getTelegramInitData(): string | null {
+  const tg = getTelegramWebApp();
+  const initData = tg?.initData;
+
+  if (typeof initData === 'string' && initData.trim().length > 0) {
+    return initData;
+  }
+
   return null;
 }
 

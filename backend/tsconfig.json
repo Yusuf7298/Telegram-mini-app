@@ -6,7 +6,9 @@
     "outDir": "./dist",
     "strict": true,
     "esModuleInterop": true,
-    "types": ["node", "jest"]
+    "types": ["node"]
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/*.spec.ts", "tests/**/*.ts"]
 }
+

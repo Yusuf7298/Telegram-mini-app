@@ -3,36 +3,75 @@ import { redis } from "../config/redis";
 import { logSuspiciousAction } from "../services/suspiciousActionLog.service";
 import { logError } from "../services/logger";
 
-const USER_LIMIT = 10; // per minute
+const USER_LIMIT = 30; // per minute
 const GLOBAL_LIMIT = 200; // per minute
 const WINDOW_MS = 60 * 1000; // 1 minute
+const FREE_BOX_WINDOW_MS = 60 * 60 * 1000;
+const BURST_WINDOW_MS = 2 * 1000;
+const BURST_LIMIT = 5;
+const IP_LIMIT = 30;
 
-// Sliding window Lua script for atomicity
-const SLIDING_WINDOW_LUA = `
-local key = KEYS[1]
-local now = tonumber(ARGV[1])
-local window = tonumber(ARGV[2])
-local limit = tonumber(ARGV[3])
-redis.call('ZREMRANGEBYSCORE', key, 0, now - window)
-redis.call('ZADD', key, now, now)
-local count = redis.call('ZCARD', key)
-redis.call('EXPIRE', key, math.ceil(window / 1000) + 2)
-return count
+const ATOMIC_RATE_LIMIT_LUA = `
+local current = redis.call("INCR", KEYS[1])
+if current == 1 then
+  redis.call("EXPIRE", KEYS[1], ARGV[1])
+end
+return current
 `;
 
-async function checkSlidingWindow(key: string, limit: number): Promise<number | null> {
-  const now = Date.now();
+const ACTION_LIMITS: Record<string, { limit: number; windowMs: number }> = {
+  "POST:/api/game/open-box": { limit: 10, windowMs: WINDOW_MS },
+  "POST:/api/game/free-box": { limit: 1, windowMs: FREE_BOX_WINDOW_MS },
+  "POST:/api/wallet/withdraw": { limit: 3, windowMs: WINDOW_MS },
+};
+
+async function checkSlidingWindow(key: string, limit: number, windowMs = WINDOW_MS): Promise<number | null> {
   try {
-    const count = await redis.eval(SLIDING_WINDOW_LUA, 1, key, now, WINDOW_MS, limit);
-    return typeof count === "number" ? count : parseInt(count as string, 10);
+    const windowSeconds = Math.max(1, Math.ceil(windowMs / 1000));
+    const countRaw = await redis.eval(ATOMIC_RATE_LIMIT_LUA, 1, key, String(windowSeconds));
+    const count = typeof countRaw === "number" ? countRaw : parseInt(String(countRaw), 10);
+
+    return count;
   } catch (err) {
     logError(err as Error, { key, limit });
     return null; // fail closed
   }
 }
 
+function normalizeRouteAction(req: Request) {
+  return `${req.method.toUpperCase()}:${req.baseUrl}${req.path}`;
+}
+
+function getRequestUserId(req: Request): string | undefined {
+  return (req as Request & { userId?: string }).userId;
+}
+
+function logRateLimitDebug(params: {
+  req: Request;
+  action: string;
+  userId?: string;
+  redisKey: string;
+  count: number | null;
+  limit: number;
+}) {
+  console.log("[RateLimitDebug]", {
+    originalUrl: params.req.originalUrl,
+    path: params.req.path,
+    baseUrl: params.req.baseUrl,
+    action: params.action,
+    userId: params.userId ?? null,
+    redisKey: params.redisKey,
+    count: params.count,
+    limit: params.limit,
+  });
+}
+
 export async function rateLimitRedisMiddleware(req: Request, res: Response, next: NextFunction) {
-  const userId = req.userId;
+  const userId = getRequestUserId(req);
+  const ip = req.ip || req.headers["x-forwarded-for"]?.toString().split(",")[0].trim() || "unknown";
+  const action = normalizeRouteAction(req);
+  const actionLimitConfig = ACTION_LIMITS[action] ?? { limit: USER_LIMIT, windowMs: WINDOW_MS };
+
   if (!userId) {
     return res.status(401).json({ error: "Unauthorized" });
   }
@@ -48,6 +87,79 @@ export async function rateLimitRedisMiddleware(req: Request, res: Response, next
   if (userCount > USER_LIMIT) {
     await logSuspiciousAction({ userId, type: "rate_limit_user_exceeded", metadata: { count: userCount } });
     return res.status(429).json({ error: "Too many requests (user)" });
+  }
+
+  const userActionKey = `rate:user:${userId}:action:${action}`;
+  const userActionCount = await checkSlidingWindow(userActionKey, actionLimitConfig.limit, actionLimitConfig.windowMs);
+  logRateLimitDebug({
+    req,
+    action,
+    userId,
+    redisKey: userActionKey,
+    count: userActionCount,
+    limit: actionLimitConfig.limit,
+  });
+  if (userActionCount === null) {
+    await logSuspiciousAction({ userId, type: "rate_limit_redis_unavailable_action", metadata: { action } });
+    return res.status(429).json({ error: "Rate limit check failed. Try again later." });
+  }
+  if (userActionCount > actionLimitConfig.limit) {
+    await logSuspiciousAction({
+      userId,
+      type: "rapid_play",
+      metadata: {
+        action,
+        count: userActionCount,
+        scope: "user_action",
+      },
+    });
+    return res.status(429).json({ error: "Rate limit exceeded" });
+  }
+
+  const ipKey = `rate:ip:${ip}`;
+  const ipCount = await checkSlidingWindow(ipKey, IP_LIMIT);
+  logRateLimitDebug({
+    req,
+    action,
+    userId,
+    redisKey: ipKey,
+    count: ipCount,
+    limit: IP_LIMIT,
+  });
+  if (ipCount === null) {
+    await logSuspiciousAction({ userId, type: "rate_limit_redis_unavailable_ip", metadata: { action } });
+    return res.status(429).json({ error: "Rate limit check failed. Try again later." });
+  }
+  if (ipCount > IP_LIMIT) {
+    await logSuspiciousAction({
+      userId,
+      type: "multi_account_same_ip",
+      metadata: { action, count: ipCount, ip },
+    });
+    return res.status(429).json({ error: "Too many requests from this IP" });
+  }
+
+  const burstKey = `rate:burst:user:${userId}:action:${action}`;
+  const burstCount = await checkSlidingWindow(burstKey, BURST_LIMIT, BURST_WINDOW_MS);
+  logRateLimitDebug({
+    req,
+    action,
+    userId,
+    redisKey: burstKey,
+    count: burstCount,
+    limit: BURST_LIMIT,
+  });
+  if (burstCount === null) {
+    await logSuspiciousAction({ userId, type: "rate_limit_redis_unavailable_burst", metadata: { action } });
+    return res.status(429).json({ error: "Rate limit check failed. Try again later." });
+  }
+  if (burstCount > BURST_LIMIT) {
+    await logSuspiciousAction({
+      userId,
+      type: "rapid_play",
+      metadata: { action, count: burstCount, scope: "burst", burstWindowMs: BURST_WINDOW_MS },
+    });
+    return res.status(429).json({ error: "Request burst detected" });
   }
 
   // Global
