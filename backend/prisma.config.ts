@@ -1,5 +1,13 @@
 import { defineConfig } from "prisma/config";
-import { env } from "./src/config/env";
+import dotenv from 'dotenv';
+
+dotenv.config();
+
+const databaseUrl = process.env.DATABASE_URL;
+
+if (!databaseUrl || !databaseUrl.trim()) {
+  throw new Error('DATABASE_URL is required for Prisma CLI commands');
+}
 
 export default defineConfig({
   schema: "prisma/schema.prisma",
@@ -8,6 +16,6 @@ export default defineConfig({
     seed: "ts-node prisma/seed/seed.ts",
   },
   datasource: {
-    url: env.DATABASE_URL,
+    url: databaseUrl,
   },
 });
