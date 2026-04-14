@@ -18,7 +18,7 @@ type DepositFieldErrors = Partial<Record<keyof DepositForm, string>>;
 const methods = [
   { label: "Debit Card", value: "card", icon: CreditCard },
   { label: "Bank Transfer", value: "bank", icon: Landmark },
-];
+] as const satisfies ReadonlyArray<{ label: string; value: DepositMethod; icon: typeof CreditCard }>;
 
 export default function DepositPage() {
   const [method, setMethod] = useState<DepositMethod>("card");
