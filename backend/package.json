@@ -6,14 +6,14 @@
     "test": "npm run prisma:generate && jest",
     "prisma:generate": "prisma generate",
     "dev": "ts-node-dev src/server.ts",
-    "build": "tsc",
+    "build": "npm run prisma:generate && tsc",
     "start": "node dist/server.js",
     "migrate:deploy": "prisma migrate deploy",
     "seed": "prisma db seed",
     "deploy:prepare": "npx prisma migrate deploy && npx prisma db seed",
     "lint": "eslint src --ext .ts,.js",
     "lint:fix": "eslint src --fix",
-   "prepare": "echo 'skip husky in production'"
+    "prepare": "echo 'skip husky in production'"
   },
   "prisma": {
     "seed": "ts-node prisma/seed/seed.ts"
@@ -25,7 +25,10 @@
   "dependencies": {
     "@prisma/adapter-pg": "^7.5.0",
     "@prisma/client": "^7.5.0",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
     "@types/jsonwebtoken": "^9.0.10",
+    "@types/node": "^25.6.0",
     "cors": "^2.8.6",
     "crypto": "^1.0.1",
     "dotenv": "^17.3.1",
@@ -45,10 +48,7 @@
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.3.5",
-    "@types/cors": "^2.8.19",
-    "@types/express": "^5.0.6",
     "@types/jest": "^30.0.0",
-    "@types/node": "^25.6.0",
     "@types/supertest": "^7.2.0",
     "@typescript-eslint/eslint-plugin": "^8.58.0",
     "@typescript-eslint/parser": "^8.58.0",
