@@ -13,7 +13,7 @@
     "deploy:prepare": "npx prisma migrate deploy && npx prisma db seed",
     "lint": "eslint src --ext .ts,.js",
     "lint:fix": "eslint src --fix",
-    "prepare": "husky install"
+   "prepare": "echo 'skip husky in production'"
   },
   "prisma": {
     "seed": "ts-node prisma/seed/seed.ts"
