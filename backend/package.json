@@ -5,7 +5,6 @@
   "scripts": {
     "test": "npm run prisma:generate && jest",
     "prisma:generate": "prisma generate",
-    "postinstall": "prisma generate",
     "dev": "ts-node-dev src/server.ts",
     "build": "tsc",
     "start": "node dist/server.js",
