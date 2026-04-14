@@ -14,10 +14,14 @@ router.get('/admin/rewards/:boxId', adminAuth_1.requireAdminAuth, admin_controll
 // NEW: Admin control endpoints
 router.post('/admin/freeze', adminAuth_1.requireAdminAuth, (0, validate_1.validateBody)(admin_validator_1.adminActionSchema), admin_controller_1.freezeUserHandler);
 router.post('/admin/unfreeze', adminAuth_1.requireAdminAuth, (0, validate_1.validateBody)(admin_validator_1.adminActionSchema), admin_controller_1.unfreezeUserHandler);
+router.post('/admin/freeze-user', adminAuth_1.requireAdminAuth, (0, validate_1.validateBody)(admin_validator_1.adminFreezeUserSchema), admin_controller_1.freezeUserHandler);
+router.post('/admin/unfreeze-user', adminAuth_1.requireAdminAuth, (0, validate_1.validateBody)(admin_validator_1.adminFreezeUserSchema), admin_controller_1.unfreezeUserHandler);
 router.post('/admin/revoke', adminAuth_1.requireAdminAuth, (0, validate_1.validateBody)(admin_validator_1.adminActionSchema), admin_controller_1.revokeRewardHandler);
 router.get('/admin/integrity', adminAuth_1.requireAdminAuth, admin_controller_1.verifySystemIntegrityHandler);
 router.get('/admin/db-integrity', adminAuth_1.requireAdminAuth, admin_controller_1.verifyWalletConstraintIntegrityHandler);
 router.get('/admin/runtime-check', adminAuth_1.requireAdminAuth, admin_controller_1.runtimeCheckHandler);
+router.get('/admin/fraud-events', adminAuth_1.requireAdminAuth, admin_controller_1.getFraudEventsHandler);
+router.get('/admin/high-risk-users', adminAuth_1.requireAdminAuth, admin_controller_1.getHighRiskUsersHandler);
 // NEW: User endpoints
 router.post('/user/freeze', adminAuth_1.requireAdminAuth, (0, validate_1.validateBody)(admin_validator_1.adminFreezeUserSchema), admin_controller_1.freezeUser);
 router.post('/reward/revoke', adminAuth_1.requireAdminAuth, (0, validate_1.validateBody)(admin_validator_1.adminRevokeSchema), admin_controller_1.revokeReward);

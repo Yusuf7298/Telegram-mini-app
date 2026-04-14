@@ -12,15 +12,30 @@ const envSchema = zod_1.z.object({
     JWT_SECRET: zod_1.z.string().min(32, 'JWT_SECRET must be at least 32 characters'),
     REDIS_URL: zod_1.z.string().min(1, 'REDIS_URL is required'),
     TELEGRAM_BOT_TOKEN: zod_1.z.string().min(1, 'TELEGRAM_BOT_TOKEN is required'),
+    ADMIN_SECRET: zod_1.z.string().min(1, 'ADMIN_SECRET is required'),
     ADMIN_JWT_SECRET: zod_1.z.string().min(32, 'ADMIN_JWT_SECRET must be at least 32 characters'),
+    FRONTEND_URL: zod_1.z.string().url().optional(),
+    FRONTEND_URL_STAGING: zod_1.z.string().url().optional(),
+    PORT: zod_1.z.string().optional(),
+    VERCEL: zod_1.z.string().optional(),
+    NODE_ENV: zod_1.z.enum(['development', 'test', 'production', 'staging'], {
+        message: 'NODE_ENV must be one of development, test, production, staging',
+    }),
 });
-const parsed = envSchema.safeParse(process.env);
+const runtimeEnv = globalThis['process']['env'];
+const parsed = envSchema.safeParse(runtimeEnv);
 if (!parsed.success) {
-    // Print all validation errors and exit
-    console.error('❌ Invalid environment configuration:');
-    for (const err of parsed.error.issues) {
-        console.error(`- ${err.message}`);
-    }
+    console.error('ENV DEBUG:', {
+        DATABASE_URL: !!process.env.DATABASE_URL,
+        JWT_SECRET: !!process.env.JWT_SECRET,
+        REDIS_URL: !!process.env.REDIS_URL,
+        TELEGRAM_BOT_TOKEN: !!process.env.TELEGRAM_BOT_TOKEN,
+        ADMIN_SECRET: !!process.env.ADMIN_SECRET,
+        FRONTEND_URL: !!process.env.FRONTEND_URL,
+        NODE_ENV: process.env.NODE_ENV,
+    });
+    const reasons = parsed.error.issues.map((issue) => issue.message).join('; ');
+    console.error(`Invalid environment configuration: ${reasons}`);
     process.exit(1);
 }
 exports.env = parsed.data;

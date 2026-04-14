@@ -1,0 +1,31 @@
+services:
+  - type: web
+    name: upworks-backend
+    runtime: node
+    rootDir: backend
+    plan: free
+    autoDeploy: true
+    buildCommand: npm install; npm run build
+    startCommand: npm start
+    healthCheckPath: /test
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: ADMIN_SECRET
+        sync: false
+      - key: ADMIN_JWT_SECRET
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
+      - key: FRONTEND_URL_STAGING
+        sync: false

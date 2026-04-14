@@ -1,6 +1,8 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.getMetrics = getMetrics;
+exports.getFraudEventsHandler = getFraudEventsHandler;
+exports.getHighRiskUsersHandler = getHighRiskUsersHandler;
 exports.verifySystemIntegrityHandler = verifySystemIntegrityHandler;
 exports.verifyWalletConstraintIntegrityHandler = verifyWalletConstraintIntegrityHandler;
 exports.runtimeCheckHandler = runtimeCheckHandler;
@@ -20,6 +22,7 @@ const admin_service_1 = require("../../services/admin.service");
 const systemStats_service_1 = require("../../services/systemStats.service");
 const runtimeCheck_service_1 = require("../../services/runtimeCheck.service");
 const responder_1 = require("../../utils/responder");
+const adminMonitoring_service_1 = require("../../services/adminMonitoring.service");
 async function getMetrics(_req, res) {
     try {
         const metrics = await (0, systemStats_service_1.getSystemMetrics)();
@@ -27,6 +30,26 @@ async function getMetrics(_req, res) {
     }
     catch {
         return (0, responder_1.failure)(res, "INTERNAL_ERROR", "Failed to fetch metrics");
+    }
+}
+async function getFraudEventsHandler(_req, res) {
+    try {
+        const events = await (0, adminMonitoring_service_1.getFraudEvents)();
+        return (0, responder_1.success)(res, events);
+    }
+    catch (err) {
+        const message = err instanceof Error ? err.message : "Failed to fetch fraud events";
+        return (0, responder_1.failure)(res, "INTERNAL_ERROR", message);
+    }
+}
+async function getHighRiskUsersHandler(_req, res) {
+    try {
+        const users = await (0, adminMonitoring_service_1.getHighRiskUsers)();
+        return (0, responder_1.success)(res, users);
+    }
+    catch (err) {
+        const message = err instanceof Error ? err.message : "Failed to fetch high-risk users";
+        return (0, responder_1.failure)(res, "INTERNAL_ERROR", message);
     }
 }
 async function verifySystemIntegrityHandler(_req, res) {

@@ -13,6 +13,8 @@ const reward_service_1 = require("../../services/reward.service");
 const lock_1 = require("../../utils/lock");
 const suspiciousActionLog_service_1 = require("../../services/suspiciousActionLog.service");
 const auditLog_service_1 = require("../../services/auditLog.service");
+const logger_1 = require("../../services/logger");
+const fraudDetection_service_1 = require("../../services/fraudDetection.service");
 const idempotency_service_1 = require("../../services/idempotency.service");
 const bonus_service_1 = require("../../services/bonus.service");
 const referral_service_1 = require("../../services/referral.service");
@@ -26,6 +28,11 @@ const FIRST_PLAY_REWARD_MAX = 251;
 const RAPID_ONBOARDING_WINDOW_MS = 10 * 1000;
 const MIN_PLAY_INTERVAL_MS = 300;
 const RESTRICTED_RISK_THRESHOLD = 70;
+function ensureUserNotFrozen(user) {
+    if (user.isFrozen) {
+        throw new Error("Account is frozen");
+    }
+}
 function assertFirstPlayRewardRange(reward) {
     const value = reward.toNumber();
     if (value < FIRST_PLAY_REWARD_MIN || value > FIRST_PLAY_REWARD_MAX - 1) {
@@ -124,8 +131,22 @@ async function enforceGameplayPacing(tx, user, action) {
 async function openBox(userId, boxId, idempotencyKey, ip, deviceId) {
     return (0, lock_1.withUserLock)(userId, async () => {
         return (0, withTransactionRetry_1.withTransactionRetry)(db_1.prisma, async (tx) => {
+            await (0, logger_1.logStructuredEvent)("financial_operation", {
+                userId,
+                action: "open_box_attempt",
+                reward: null,
+                idempotencyKey,
+                timestamp: new Date().toISOString(),
+            });
             const existing = await (0, idempotency_service_1.checkIdempotencyKey)({ id: idempotencyKey, userId, tx });
             if (existing?.status === "COMPLETED") {
+                await (0, logger_1.logStructuredEvent)("financial_operation", {
+                    userId,
+                    action: "idempotency_replay",
+                    reward: existing.response?.data?.reward ?? null,
+                    idempotencyKey,
+                    timestamp: new Date().toISOString(),
+                });
                 return existing.response;
             }
             if (existing?.status === "PENDING") {
@@ -159,7 +180,8 @@ async function openBox(userId, boxId, idempotencyKey, ip, deviceId) {
             });
             if (!user)
                 throw new Error("User not found");
-            if (user.isFrozen || user.accountStatus !== "ACTIVE" || user.riskScore > RESTRICTED_RISK_THRESHOLD) {
+            ensureUserNotFrozen(user);
+            if (user.accountStatus !== "ACTIVE" || user.riskScore > RESTRICTED_RISK_THRESHOLD) {
                 throw new Error("Account restricted");
             }
             await enforceGameplayPacing(tx, { id: user.id, lastPlayTimestamp: user.lastPlayTimestamp }, "openBox");
@@ -193,6 +215,13 @@ async function openBox(userId, boxId, idempotencyKey, ip, deviceId) {
             }
             const nextCashBalance = wallet.cashBalance.minus(cashUsed);
             const nextBonusBalance = wallet.bonusBalance.minus(bonusUsed);
+            await (0, logger_1.logStructuredEvent)("financial_operation", {
+                userId,
+                action: "box_purchase_mutation_before",
+                amount: box.price.toString(),
+                idempotencyKey,
+                timestamp: new Date().toISOString(),
+            });
             const deductResult = await tx.wallet.updateMany({
                 where: {
                     userId,
@@ -203,6 +232,13 @@ async function openBox(userId, boxId, idempotencyKey, ip, deviceId) {
                     cashBalance: nextCashBalance,
                     bonusBalance: nextBonusBalance,
                 },
+            });
+            await (0, logger_1.logStructuredEvent)("financial_operation", {
+                userId,
+                action: "box_purchase_mutation_after",
+                amount: box.price.toString(),
+                idempotencyKey,
+                timestamp: new Date().toISOString(),
             });
             if (deductResult.count === 0) {
                 throw new Error("Balance changed, please retry");
@@ -240,9 +276,42 @@ async function openBox(userId, boxId, idempotencyKey, ip, deviceId) {
                     await (0, rtp_service_1.adjustRewardProbabilities)(false);
                 }
             }
+            await (0, logger_1.logStructuredEvent)("financial_operation", {
+                userId,
+                action: "box_reward_mutation_before",
+                reward: reward.toString(),
+                idempotencyKey,
+                timestamp: new Date().toISOString(),
+            });
+            const openBoxSuspicion = (0, fraudDetection_service_1.recordBoxOpenAttempt)(userId);
+            if (openBoxSuspicion.isSuspicious) {
+                await (0, logger_1.logStructuredEvent)("fraud_detected", {
+                    userId,
+                    reason: openBoxSuspicion.reason,
+                    type: "open_box_rate",
+                    timestamp: new Date().toISOString(),
+                });
+            }
+            const rewardSuspicion = (0, fraudDetection_service_1.recordRewardEvent)(userId, reward);
+            if (rewardSuspicion.isSuspicious) {
+                await (0, logger_1.logStructuredEvent)("fraud_detected", {
+                    userId,
+                    reason: rewardSuspicion.reason,
+                    type: "reward_spike",
+                    amount: reward.toString(),
+                    timestamp: new Date().toISOString(),
+                });
+            }
             await tx.wallet.update({
                 where: { userId },
                 data: { cashBalance: { increment: reward } },
+            });
+            await (0, logger_1.logStructuredEvent)("financial_operation", {
+                userId,
+                action: "box_reward_mutation_after",
+                reward: reward.toString(),
+                idempotencyKey,
+                timestamp: new Date().toISOString(),
             });
             if (bonusUsed.gt(0)) {
                 await (0, bonus_service_1.trackBonusUsage)({ userId, bonusType: "box", amount: bonusUsed, tx });
@@ -330,15 +399,47 @@ async function openBox(userId, boxId, idempotencyKey, ip, deviceId) {
                 tx,
             });
             await (0, auditLog_service_1.logAudit)({ userId, action: "box_open", details: { boxId, reward: reward.toString() }, tx });
+            await (0, logger_1.logStructuredEvent)("financial_operation", {
+                userId,
+                action: "box_opened",
+                amount: box.price.toString(),
+                reward: reward.toString(),
+                idempotencyKey,
+                timestamp: new Date().toISOString(),
+            });
             return completedResponse;
         });
+    }).catch(async (err) => {
+        await (0, logger_1.logStructuredEvent)("financial_operation", {
+            userId,
+            action: "box_open_failed",
+            reward: null,
+            idempotencyKey,
+            timestamp: new Date().toISOString(),
+            message: err instanceof Error ? err.message : String(err),
+        });
+        throw err;
     });
 }
 async function openFreeBox(userId, idempotencyKey, ip, deviceId) {
     return (0, lock_1.withUserLock)(userId, async () => {
         return (0, withTransactionRetry_1.withTransactionRetry)(db_1.prisma, async (tx) => {
+            await (0, logger_1.logStructuredEvent)("financial_operation", {
+                userId,
+                action: "open_free_box_attempt",
+                reward: null,
+                idempotencyKey,
+                timestamp: new Date().toISOString(),
+            });
             const existing = await (0, idempotency_service_1.checkIdempotencyKey)({ id: idempotencyKey, userId, tx });
             if (existing?.status === "COMPLETED") {
+                await (0, logger_1.logStructuredEvent)("financial_operation", {
+                    userId,
+                    action: "idempotency_replay",
+                    reward: existing.response?.data?.reward ?? null,
+                    idempotencyKey,
+                    timestamp: new Date().toISOString(),
+                });
                 return existing.response;
             }
             if (existing?.status === "PENDING") {
@@ -373,7 +474,8 @@ async function openFreeBox(userId, idempotencyKey, ip, deviceId) {
             });
             if (!user)
                 throw new Error("User not found");
-            if (user.isFrozen || user.accountStatus !== "ACTIVE" || user.riskScore > RESTRICTED_RISK_THRESHOLD) {
+            ensureUserNotFrozen(user);
+            if (user.accountStatus !== "ACTIVE" || user.riskScore > RESTRICTED_RISK_THRESHOLD) {
                 throw new Error("Account restricted");
             }
             await enforceGameplayPacing(tx, { id: user.id, lastPlayTimestamp: user.lastPlayTimestamp }, "openFreeBox");
@@ -397,9 +499,42 @@ async function openFreeBox(userId, idempotencyKey, ip, deviceId) {
                 assertFirstPlayRewardRange(reward);
                 logFirstPlayReward(userId, "openFreeBox", reward);
             }
+            const openBoxSuspicion = (0, fraudDetection_service_1.recordBoxOpenAttempt)(userId);
+            if (openBoxSuspicion.isSuspicious) {
+                await (0, logger_1.logStructuredEvent)("fraud_detected", {
+                    userId,
+                    reason: openBoxSuspicion.reason,
+                    type: "open_box_rate",
+                    timestamp: new Date().toISOString(),
+                });
+            }
+            const rewardSuspicion = (0, fraudDetection_service_1.recordRewardEvent)(userId, reward);
+            if (rewardSuspicion.isSuspicious) {
+                await (0, logger_1.logStructuredEvent)("fraud_detected", {
+                    userId,
+                    reason: rewardSuspicion.reason,
+                    type: "reward_spike",
+                    amount: reward.toString(),
+                    timestamp: new Date().toISOString(),
+                });
+            }
+            await (0, logger_1.logStructuredEvent)("financial_operation", {
+                userId,
+                action: "free_box_reward_mutation_before",
+                reward: reward.toString(),
+                idempotencyKey,
+                timestamp: new Date().toISOString(),
+            });
             const walletAfterReward = await tx.wallet.update({
                 where: { userId },
                 data: { cashBalance: { increment: reward } },
+            });
+            await (0, logger_1.logStructuredEvent)("financial_operation", {
+                userId,
+                action: "free_box_reward_mutation_after",
+                reward: reward.toString(),
+                idempotencyKey,
+                timestamp: new Date().toISOString(),
             });
             await tx.transaction.create({
                 data: {
@@ -452,8 +587,25 @@ async function openFreeBox(userId, idempotencyKey, ip, deviceId) {
                 },
                 tx,
             });
+            await (0, logger_1.logStructuredEvent)("financial_operation", {
+                userId,
+                action: "box_opened",
+                reward: reward.toString(),
+                idempotencyKey,
+                timestamp: new Date().toISOString(),
+            });
             return completedResponse;
         });
+    }).catch(async (err) => {
+        await (0, logger_1.logStructuredEvent)("financial_operation", {
+            userId,
+            action: "box_open_failed",
+            reward: null,
+            idempotencyKey,
+            timestamp: new Date().toISOString(),
+            message: err instanceof Error ? err.message : String(err),
+        });
+        throw err;
     });
 }
 async function getBoxes() {

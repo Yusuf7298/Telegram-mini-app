@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.requireAdminAuth = requireAdminAuth;
 // NEW: Admin permission middleware
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
+const env_1 = require("../config/env");
 const apiResponse_1 = require("../utils/apiResponse");
 // Hardened admin auth: require admin JWT role AND secondary secret
 function requireAdminAuth(req, res, next) {
@@ -17,7 +18,7 @@ function requireAdminAuth(req, res, next) {
     if (!token) {
         return res.status((0, apiResponse_1.getErrorStatus)('FORBIDDEN')).json((0, apiResponse_1.structuredError)('FORBIDDEN', 'Admin access required'));
     }
-    const secret = process.env.JWT_SECRET;
+    const secret = env_1.env.JWT_SECRET;
     if (!secret) {
         return res.status((0, apiResponse_1.getErrorStatus)('INTERNAL_ERROR')).json((0, apiResponse_1.structuredError)('INTERNAL_ERROR', 'Auth is not configured'));
     }
@@ -30,7 +31,7 @@ function requireAdminAuth(req, res, next) {
     catch {
         return res.status((0, apiResponse_1.getErrorStatus)('FORBIDDEN')).json((0, apiResponse_1.structuredError)('FORBIDDEN', 'Admin access required'));
     }
-    const adminSecret = process.env.ADMIN_SECONDARY_SECRET;
+    const adminSecret = env_1.env.ADMIN_SECRET;
     const providedSecret = req.headers['x-admin-secret'];
     if (!adminSecret || !providedSecret || providedSecret !== adminSecret) {
         return res.status((0, apiResponse_1.getErrorStatus)('UNAUTHORIZED')).json((0, apiResponse_1.structuredError)('UNAUTHORIZED', 'Secondary admin secret required'));

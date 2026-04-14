@@ -1,12 +1,10 @@
 "use strict";
-// Unified API response helpers for all endpoints
-// Ensures: { success, data, error } structure
-// No stack traces in production, safe error messages, Unity-friendly
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.getErrorStatus = getErrorStatus;
 exports.successResponse = successResponse;
 exports.errorResponse = errorResponse;
 exports.structuredError = structuredError;
+const env_1 = require("../config/env");
 const ERROR_STATUS = {
     RATE_LIMIT: 429,
     REPLAY_ATTACK: 409,
@@ -56,7 +54,7 @@ function successResponse(data = null) {
     };
 }
 function errorResponse(message, opts) {
-    const safeMsg = opts?.production || process.env.NODE_ENV === "production"
+    const safeMsg = opts?.production || env_1.env.NODE_ENV === "production"
         ? sanitizeErrorMessage(message)
         : message;
     return {

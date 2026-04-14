@@ -28,7 +28,11 @@ async function telegramLogin(req, res) {
             const authMessage = authErr instanceof Error ? authErr.message : "Invalid Telegram data";
             return (0, responder_1.failure)(res, "REPLAY_ATTACK", authMessage);
         }
-        const user = await (0, auth_service_1.authWithTelegram)(initData);
+        const user = await (0, auth_service_1.authWithTelegram)(initData, {
+            ip,
+            deviceId: req.headers["x-device-id"] || undefined,
+            userAgent: req.headers["user-agent"],
+        });
         const token = (0, auth_service_1.generateToken)(user.id);
         return (0, responder_1.success)(res, {
             token,

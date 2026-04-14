@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.verifyTelegramAuth = verifyTelegramAuth;
+const env_1 = require("../config/env");
 const verifyTelegramSignature_1 = require("../utils/verifyTelegramSignature");
 const auth_service_1 = require("../services/auth.service");
 const db_1 = require("../config/db");
@@ -8,7 +9,7 @@ const apiResponse_1 = require("../utils/apiResponse");
 const MAX_AGE_SECONDS = 3600; // 1 hour
 async function verifyTelegramAuth(req, res, next) {
     try {
-        const botToken = process.env.TELEGRAM_BOT_TOKEN;
+        const botToken = env_1.env.TELEGRAM_BOT_TOKEN;
         if (!botToken) {
             return res.status((0, apiResponse_1.getErrorStatus)("INTERNAL_ERROR")).json((0, apiResponse_1.structuredError)("INTERNAL_ERROR", "Telegram bot token not configured"));
         }

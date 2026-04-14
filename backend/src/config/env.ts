@@ -23,6 +23,16 @@ const runtimeEnv = globalThis['process']['env'] as NodeJS.ProcessEnv;
 const parsed = envSchema.safeParse(runtimeEnv);
 
 if (!parsed.success) {
+  console.error('ENV DEBUG:', {
+    DATABASE_URL: !!process.env.DATABASE_URL,
+    JWT_SECRET: !!process.env.JWT_SECRET,
+    REDIS_URL: !!process.env.REDIS_URL,
+    TELEGRAM_BOT_TOKEN: !!process.env.TELEGRAM_BOT_TOKEN,
+    ADMIN_SECRET: !!process.env.ADMIN_SECRET,
+    FRONTEND_URL: !!process.env.FRONTEND_URL,
+    NODE_ENV: process.env.NODE_ENV,
+  });
+
   const reasons = parsed.error.issues.map((issue) => issue.message).join('; ');
   console.error(`Invalid environment configuration: ${reasons}`);
   process.exit(1);

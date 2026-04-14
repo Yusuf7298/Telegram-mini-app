@@ -102,6 +102,13 @@ async function createIdempotencyKey({ id, userId, action, tx, }) {
     const client = tx || db_1.prisma;
     const now = new Date();
     const expiresAt = new Date(now.getTime() + IDEMPOTENCY_TTL_MS);
+    await (0, logger_1.logStructuredEvent)("idempotency_operation", {
+        userId,
+        action: "idempotency_create_attempt",
+        amount: "0",
+        idempotencyKey: id,
+        timestamp: new Date().toISOString(),
+    });
     const insertResult = await client.idempotencyKey.createMany({
         data: [
             {
@@ -139,6 +146,13 @@ async function completeIdempotencyKey({ id, userId, response, metadata, tx, }) {
     }
     const rewardAmount = extractRewardAmount(response);
     const normalizedResponse = normalizeIdempotencyResponse(response, metadata);
+    await (0, logger_1.logStructuredEvent)("idempotency_operation", {
+        userId,
+        action: "idempotency_complete_before",
+        reward: rewardAmount.toString(),
+        idempotencyKey: id,
+        timestamp: new Date().toISOString(),
+    });
     await client.idempotencyKey.update({
         where: { id },
         data: {
@@ -147,6 +161,13 @@ async function completeIdempotencyKey({ id, userId, response, metadata, tx, }) {
             response: normalizedResponse,
             expiresAt: new Date(),
         },
+    });
+    await (0, logger_1.logStructuredEvent)("idempotency_operation", {
+        userId,
+        action: "idempotency_complete_after",
+        reward: rewardAmount.toString(),
+        idempotencyKey: id,
+        timestamp: new Date().toISOString(),
     });
     return normalizedResponse;
 }
@@ -160,11 +181,19 @@ async function checkIdempotencyKey({ id, userId, tx, }) {
     if (key.status === "PENDING" && key.expiresAt && key.expiresAt < new Date())
         throw new Error("Idempotency key expired");
     if (key.status === "COMPLETED") {
+        const replayReward = toDecimalString(key.response?.data?.reward ?? key.rewardAmount);
         await (0, logger_1.logStructuredEvent)("idempotency_hit", {
             userId,
             endpoint: key.action,
             idempotencyKey: id,
             action: key.action,
+            timestamp: new Date().toISOString(),
+        });
+        await (0, logger_1.logStructuredEvent)("idempotency_operation", {
+            userId,
+            action: "idempotency_replay",
+            reward: replayReward,
+            idempotencyKey: id,
             timestamp: new Date().toISOString(),
         });
         return {

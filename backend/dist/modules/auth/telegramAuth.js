@@ -5,9 +5,10 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.verifyTelegramData = verifyTelegramData;
 const crypto_1 = __importDefault(require("crypto"));
+const env_1 = require("../../config/env");
 const MAX_AUTH_AGE_SECONDS = 60 * 5;
 function verifyTelegramData(initData) {
-    const botToken = process.env.TELEGRAM_BOT_TOKEN;
+    const botToken = env_1.env.TELEGRAM_BOT_TOKEN;
     if (!botToken) {
         throw new Error("Telegram auth is not configured");
     }

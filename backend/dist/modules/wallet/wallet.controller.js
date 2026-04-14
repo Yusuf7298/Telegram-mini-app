@@ -10,6 +10,7 @@ const wallet_service_1 = require("./wallet.service");
 const client_1 = require("@prisma/client");
 const responder_1 = require("../../utils/responder");
 const idempotencyKey_1 = require("../../utils/idempotencyKey");
+const logger_1 = require("../../services/logger");
 function getRequestUserId(req) {
     return req.userId;
 }
@@ -87,6 +88,10 @@ async function withdrawFromWallet(req, res) {
     }
     catch (err) {
         const message = err instanceof Error ? err.message : "Failed to withdraw funds";
+        await (0, logger_1.logError)(err instanceof Error ? err : new Error(message), {
+            endpoint: "/wallet/withdraw",
+            userId: getRequestUserId(req) ?? null,
+        });
         return (0, responder_1.failure)(res, "INTERNAL_ERROR", message);
     }
 }

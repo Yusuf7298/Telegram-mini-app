@@ -55,12 +55,13 @@ function getRequestUserId(req) {
     return req.userId;
 }
 function logRateLimitDebug(params) {
-    console.log("[RateLimitDebug]", {
+    void (0, logger_1.logDebug)("rate_limit_debug", {
+        endpoint: `${params.req.baseUrl}${params.req.path}`,
+        action: params.action,
+        userId: params.userId ?? "unknown",
         originalUrl: params.req.originalUrl,
         path: params.req.path,
         baseUrl: params.req.baseUrl,
-        action: params.action,
-        userId: params.userId ?? null,
         keySource: params.keySource ?? null,
         redisKey: params.redisKey,
         count: params.count,
@@ -88,6 +89,14 @@ async function rateLimitRedisMiddleware(req, res, next) {
             return res.status((0, apiResponse_1.getErrorStatus)("RATE_LIMIT")).json((0, apiResponse_1.structuredError)("RATE_LIMIT", "Rate limit check failed. Try again later."));
         }
         if (userRate.count > USER_LIMIT) {
+            await (0, logger_1.logStructuredEvent)("rate_limit_hit", {
+                userId,
+                action,
+                count: userRate.count,
+                limit: USER_LIMIT,
+                scope: "user",
+                timestamp: new Date().toISOString(),
+            });
             await (0, suspiciousActionLog_service_1.logSuspiciousAction)({ userId, type: "rate_limit_user_exceeded", metadata: { count: userRate.count } });
             return res.status((0, apiResponse_1.getErrorStatus)("RATE_LIMIT")).json((0, apiResponse_1.structuredError)("RATE_LIMIT", "Too many requests (user)"));
         }
@@ -114,6 +123,16 @@ async function rateLimitRedisMiddleware(req, res, next) {
     }
     setRateLimitHeaders(res, actionLimitConfig.limit, actionRate.count, actionRate.ttlSeconds);
     if (actionRate.count > actionLimitConfig.limit) {
+        await (0, logger_1.logStructuredEvent)("rate_limit_hit", {
+            userId: userId ?? null,
+            action,
+            count: actionRate.count,
+            limit: actionLimitConfig.limit,
+            scope: "action",
+            keySource: actionKeySource,
+            ip,
+            timestamp: new Date().toISOString(),
+        });
         if (userId) {
             await (0, suspiciousActionLog_service_1.logSuspiciousAction)({
                 userId,
@@ -146,6 +165,15 @@ async function rateLimitRedisMiddleware(req, res, next) {
         return res.status((0, apiResponse_1.getErrorStatus)("RATE_LIMIT")).json((0, apiResponse_1.structuredError)("RATE_LIMIT", "Rate limit check failed. Try again later."));
     }
     if (ipRate.count > IP_LIMIT) {
+        await (0, logger_1.logStructuredEvent)("rate_limit_hit", {
+            userId: userId ?? null,
+            action,
+            count: ipRate.count,
+            limit: IP_LIMIT,
+            scope: "ip",
+            ip,
+            timestamp: new Date().toISOString(),
+        });
         if (userId) {
             await (0, suspiciousActionLog_service_1.logSuspiciousAction)({
                 userId,
@@ -176,6 +204,16 @@ async function rateLimitRedisMiddleware(req, res, next) {
         return res.status((0, apiResponse_1.getErrorStatus)("RATE_LIMIT")).json((0, apiResponse_1.structuredError)("RATE_LIMIT", "Rate limit check failed. Try again later."));
     }
     if (burstRate.count > BURST_LIMIT) {
+        await (0, logger_1.logStructuredEvent)("rate_limit_hit", {
+            userId: userId ?? null,
+            action,
+            count: burstRate.count,
+            limit: BURST_LIMIT,
+            scope: "burst",
+            keySource: burstKeySource,
+            ip,
+            timestamp: new Date().toISOString(),
+        });
         if (userId) {
             await (0, suspiciousActionLog_service_1.logSuspiciousAction)({
                 userId,
@@ -201,6 +239,15 @@ async function rateLimitRedisMiddleware(req, res, next) {
         return res.status((0, apiResponse_1.getErrorStatus)("RATE_LIMIT")).json((0, apiResponse_1.structuredError)("RATE_LIMIT", "Rate limit check failed. Try again later."));
     }
     if (globalRate.count > GLOBAL_LIMIT) {
+        await (0, logger_1.logStructuredEvent)("rate_limit_hit", {
+            userId: userId ?? null,
+            action,
+            count: globalRate.count,
+            limit: GLOBAL_LIMIT,
+            scope: "global",
+            ip,
+            timestamp: new Date().toISOString(),
+        });
         if (userId) {
             await (0, suspiciousActionLog_service_1.logSuspiciousAction)({ userId, type: "rate_limit_global_exceeded", metadata: { count: globalRate.count } });
         }

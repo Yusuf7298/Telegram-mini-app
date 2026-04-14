@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.authMiddleware = authMiddleware;
 exports.requireAdmin = requireAdmin;
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
+const env_1 = require("../config/env");
 const apiResponse_1 = require("../utils/apiResponse");
 async function authMiddleware(req, res, next) {
     const authHeader = req.headers.authorization;
@@ -16,7 +17,7 @@ async function authMiddleware(req, res, next) {
     if (!token) {
         return res.status((0, apiResponse_1.getErrorStatus)("UNAUTHORIZED")).json((0, apiResponse_1.structuredError)("UNAUTHORIZED", "Unauthorized"));
     }
-    const secret = process.env.JWT_SECRET;
+    const secret = env_1.env.JWT_SECRET;
     if (!secret) {
         return res.status((0, apiResponse_1.getErrorStatus)("INTERNAL_ERROR")).json((0, apiResponse_1.structuredError)("INTERNAL_ERROR", "Auth is not configured"));
     }
@@ -38,7 +39,7 @@ function requireAdmin(req, res, next) {
         return res.status((0, apiResponse_1.getErrorStatus)('UNAUTHORIZED')).json((0, apiResponse_1.structuredError)('UNAUTHORIZED', 'Unauthorized'));
     }
     const token = authHeader.split(' ')[1];
-    const secret = process.env.JWT_SECRET;
+    const secret = env_1.env.JWT_SECRET;
     if (!secret) {
         return res.status((0, apiResponse_1.getErrorStatus)('INTERNAL_ERROR')).json((0, apiResponse_1.structuredError)('INTERNAL_ERROR', 'Auth is not configured'));
     }

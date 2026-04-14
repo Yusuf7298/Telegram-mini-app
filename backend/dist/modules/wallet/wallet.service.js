@@ -13,6 +13,8 @@ const lock_1 = require("../../utils/lock");
 const withTransactionRetry_1 = require("../../services/withTransactionRetry");
 const idempotency_service_1 = require("../../services/idempotency.service");
 const suspiciousActionLog_service_1 = require("../../services/suspiciousActionLog.service");
+const logger_1 = require("../../services/logger");
+const fraudDetection_service_1 = require("../../services/fraudDetection.service");
 const WITHDRAW_BLOCK_RISK_THRESHOLD = 70;
 const WITHDRAW_MIN_PLAYS = 5;
 const WITHDRAW_REWARD_COOLDOWN_MS = 60 * 1000;
@@ -25,8 +27,22 @@ async function depositWallet(userId, amountInput, idempotencyKey) {
         throw new Error("Amount must be greater than zero");
     return (0, lock_1.withUserLock)(userId, async () => {
         return (0, withTransactionRetry_1.withTransactionRetry)(db_1.prisma, async (tx) => {
+            await (0, logger_1.logStructuredEvent)("financial_operation", {
+                userId,
+                action: "deposit_attempt",
+                amount: amount.toString(),
+                idempotencyKey,
+                timestamp: new Date().toISOString(),
+            });
             const existing = await (0, idempotency_service_1.checkIdempotencyKey)({ id: idempotencyKey, userId, tx });
             if (existing?.status === "COMPLETED") {
+                await (0, logger_1.logStructuredEvent)("financial_operation", {
+                    userId,
+                    action: "idempotency_replay",
+                    amount: amount.toString(),
+                    idempotencyKey,
+                    timestamp: new Date().toISOString(),
+                });
                 return existing.response;
             }
             if (existing?.status === "PENDING") {
@@ -50,9 +66,23 @@ async function depositWallet(userId, amountInput, idempotencyKey) {
                 throw new Error("Wallet not found");
             const before = wallet.cashBalance.plus(wallet.bonusBalance);
             const nextCash = wallet.cashBalance.plus(amount);
+            await (0, logger_1.logStructuredEvent)("financial_operation", {
+                userId,
+                action: "deposit_mutation_before",
+                amount: amount.toString(),
+                idempotencyKey,
+                timestamp: new Date().toISOString(),
+            });
             const updated = await tx.wallet.updateMany({
                 where: { userId, cashBalance: wallet.cashBalance, bonusBalance: wallet.bonusBalance },
                 data: { cashBalance: nextCash },
+            });
+            await (0, logger_1.logStructuredEvent)("financial_operation", {
+                userId,
+                action: "deposit_mutation_after",
+                amount: amount.toString(),
+                idempotencyKey,
+                timestamp: new Date().toISOString(),
             });
             if (updated.count === 0) {
                 throw new Error("Balance changed, please retry");
@@ -80,8 +110,25 @@ async function depositWallet(userId, amountInput, idempotencyKey) {
                 },
                 tx,
             });
+            await (0, logger_1.logStructuredEvent)("financial_operation", {
+                userId,
+                action: "deposit_success",
+                amount: amount.toString(),
+                idempotencyKey,
+                timestamp: new Date().toISOString(),
+            });
             return completedResponse;
         });
+    }).catch(async (err) => {
+        await (0, logger_1.logStructuredEvent)("financial_operation", {
+            userId,
+            action: "deposit_failed",
+            amount: amount.toString(),
+            idempotencyKey,
+            timestamp: new Date().toISOString(),
+            message: err instanceof Error ? err.message : String(err),
+        });
+        throw err;
     });
 }
 async function withdrawWallet(userId, amountInput, idempotencyKey) {
@@ -90,8 +137,22 @@ async function withdrawWallet(userId, amountInput, idempotencyKey) {
         throw new Error("Amount must be greater than zero");
     return (0, lock_1.withUserLock)(userId, async () => {
         return (0, withTransactionRetry_1.withTransactionRetry)(db_1.prisma, async (tx) => {
+            await (0, logger_1.logStructuredEvent)("financial_operation", {
+                userId,
+                action: "withdraw_attempt",
+                amount: amount.toString(),
+                idempotencyKey,
+                timestamp: new Date().toISOString(),
+            });
             const existing = await (0, idempotency_service_1.checkIdempotencyKey)({ id: idempotencyKey, userId, tx });
             if (existing?.status === "COMPLETED") {
+                await (0, logger_1.logStructuredEvent)("financial_operation", {
+                    userId,
+                    action: "idempotency_replay",
+                    amount: amount.toString(),
+                    idempotencyKey,
+                    timestamp: new Date().toISOString(),
+                });
                 return existing.response;
             }
             if (existing?.status === "PENDING") {
@@ -113,6 +174,7 @@ async function withdrawWallet(userId, amountInput, idempotencyKey) {
             const user = await tx.user.findUnique({
                 where: { id: userId },
                 select: {
+                    isFrozen: true,
                     accountStatus: true,
                     riskScore: true,
                     totalPlaysCount: true,
@@ -121,11 +183,16 @@ async function withdrawWallet(userId, amountInput, idempotencyKey) {
             if (!user) {
                 throw new Error("User not found");
             }
-            if (user.accountStatus === "FROZEN" || user.riskScore > WITHDRAW_BLOCK_RISK_THRESHOLD) {
+            if (user.isFrozen || user.accountStatus === "FROZEN" || user.riskScore > WITHDRAW_BLOCK_RISK_THRESHOLD) {
                 await (0, suspiciousActionLog_service_1.logSuspiciousAction)({
                     userId,
                     type: "withdrawal_risk",
-                    metadata: { reason: "high_risk_withdraw_attempt", riskScore: user.riskScore, accountStatus: user.accountStatus },
+                    metadata: {
+                        reason: user.isFrozen ? "frozen_account_withdraw_attempt" : "high_risk_withdraw_attempt",
+                        riskScore: user.riskScore,
+                        accountStatus: user.accountStatus,
+                        isFrozen: user.isFrozen,
+                    },
                     tx,
                 });
                 throw new Error("Withdrawals are restricted for this account");
@@ -167,6 +234,17 @@ async function withdrawWallet(userId, amountInput, idempotencyKey) {
             const wallet = await tx.wallet.findUnique({ where: { userId } });
             if (!wallet)
                 throw new Error("Wallet not found");
+            const withdrawSuspicion = (0, fraudDetection_service_1.recordWithdrawAttempt)(userId);
+            if (withdrawSuspicion.isSuspicious) {
+                await (0, logger_1.logStructuredEvent)("fraud_detected", {
+                    userId,
+                    reason: withdrawSuspicion.reason,
+                    type: "withdraw_frequency",
+                    amount: amount.toString(),
+                    idempotencyKey,
+                    timestamp: new Date().toISOString(),
+                });
+            }
             const withdrawableBonus = wallet.bonusLocked ? new client_1.Prisma.Decimal(0) : wallet.bonusBalance;
             const withdrawableTotal = wallet.cashBalance.plus(withdrawableBonus);
             if (withdrawableTotal.lt(amount))
@@ -176,9 +254,23 @@ async function withdrawWallet(userId, amountInput, idempotencyKey) {
             const bonusUsed = amount.minus(cashUsed);
             const nextCash = wallet.cashBalance.minus(cashUsed);
             const nextBonus = wallet.bonusBalance.minus(bonusUsed);
+            await (0, logger_1.logStructuredEvent)("financial_operation", {
+                userId,
+                action: "withdraw_mutation_before",
+                amount: amount.toString(),
+                idempotencyKey,
+                timestamp: new Date().toISOString(),
+            });
             const updated = await tx.wallet.updateMany({
                 where: { userId, cashBalance: wallet.cashBalance, bonusBalance: wallet.bonusBalance },
                 data: { cashBalance: nextCash, bonusBalance: nextBonus },
+            });
+            await (0, logger_1.logStructuredEvent)("financial_operation", {
+                userId,
+                action: "withdraw_mutation_after",
+                amount: amount.toString(),
+                idempotencyKey,
+                timestamp: new Date().toISOString(),
             });
             if (updated.count === 0) {
                 throw new Error("Balance changed, please retry");
@@ -211,8 +303,25 @@ async function withdrawWallet(userId, amountInput, idempotencyKey) {
                 },
                 tx,
             });
+            await (0, logger_1.logStructuredEvent)("financial_operation", {
+                userId,
+                action: "withdraw_success",
+                amount: amount.toString(),
+                idempotencyKey,
+                timestamp: new Date().toISOString(),
+            });
             return completedResponse;
         });
+    }).catch(async (err) => {
+        await (0, logger_1.logStructuredEvent)("financial_operation", {
+            userId,
+            action: "withdraw_failed",
+            amount: amount.toString(),
+            idempotencyKey,
+            timestamp: new Date().toISOString(),
+            message: err instanceof Error ? err.message : String(err),
+        });
+        throw err;
     });
 }
 async function checkWalletIntegrity(userId) {
