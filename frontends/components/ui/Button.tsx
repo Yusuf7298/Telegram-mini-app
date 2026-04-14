@@ -15,21 +15,23 @@ const variantClasses: Record<ButtonVariant, string> = {
   outline: 'border border-blue-600 text-blue-600 bg-white hover:bg-blue-50',
 };
 
+const MotionButton = motion.button;
+
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
   ({ variant = 'primary', className, children, ...props }, ref) => (
-    <motion.button
+    <MotionButton
       ref={ref}
       whileHover={{ scale: 1.04 }}
       whileTap={{ scale: 0.97 }}
       className={cn(
-        'px-4 py-2 rounded-lg font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:opacity-60 disabled:cursor-not-allowed',
+        'min-h-[44px] px-4 py-2 rounded-lg font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:opacity-60 disabled:cursor-not-allowed',
         variantClasses[variant],
         className
       )}
       {...props}
     >
       {children}
-    </motion.button>
+    </MotionButton>
   )
 );
 Button.displayName = 'Button';

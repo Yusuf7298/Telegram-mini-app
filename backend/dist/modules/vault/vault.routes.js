@@ -2,7 +2,9 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const vault_controller_1 = require("./vault.controller");
+const validate_1 = require("../../middleware/validate");
+const vault_validator_1 = require("../../validators/vault.validator");
 const router = (0, express_1.Router)();
-router.post("/claim", vault_controller_1.claimVaultController);
+router.post("/claim", (0, validate_1.validateBody)(vault_validator_1.claimVaultSchema), vault_controller_1.claimVaultController);
 router.get("/", vault_controller_1.getUserVaultProgressController);
 exports.default = router;

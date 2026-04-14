@@ -2,6 +2,9 @@ import { Request, Response } from "express";
 import { prisma } from "../../config/db";
 import { depositWallet, withdrawWallet } from "./wallet.service";
 import { Prisma } from '@prisma/client';
+import { failure, success } from "../../utils/responder";
+import { extractIdempotencyKey } from "../../utils/idempotencyKey";
+import { logError } from "../../services/logger";
 
 function getRequestUserId(req: Request): string | undefined {
   return (req as Request & { userId?: string }).userId;
@@ -31,15 +34,15 @@ export async function getWallet(req: Request, res: Response) {
   try {
     const userId = getRequestUserId(req);
     if (typeof userId !== "string" || !userId.trim()) {
-      return res.status(400).json({ success: false, data: {}, error: "userId is required" });
+      return failure(res, "INVALID_INPUT", "userId is required");
     }
     const wallet = await prisma.wallet.findUnique({ where: { userId } });
     if (!wallet) {
-      return res.status(404).json({ success: false, data: {}, error: "Wallet not found" });
+      return failure(res, "NOT_FOUND", "Wallet not found");
     }
-    return res.json({ success: true, data: wallet, error: null });
+    return success(res, wallet);
   } catch (err) {
-    return res.status(500).json({ success: false, data: {}, error: "Failed to fetch wallet" });
+    return failure(res, "INTERNAL_ERROR", "Failed to fetch wallet");
   }
 }
 
@@ -47,26 +50,30 @@ export async function depositToWallet(req: Request, res: Response) {
   try {
     const userId = getRequestUserId(req);
     const amount = parsePositiveDecimal(req.body?.amount);
-    const idempotencyKey = req.body?.idempotencyKey;
+    const idempotencyKey = extractIdempotencyKey(req);
 
     if (typeof userId !== "string" || !userId.trim()) {
-      return res.status(400).json({ success: false, error: "userId is required" });
+      return failure(res, "INVALID_INPUT", "userId is required");
     }
 
     if (amount === null) {
-      return res.status(400).json({ success: false, error: "Valid amount is required" });
+      return failure(res, "INVALID_INPUT", "Valid amount is required");
     }
 
     if (typeof idempotencyKey !== "string" || !idempotencyKey.trim()) {
-      return res.status(400).json({ success: false, error: "idempotencyKey is required" });
+      return failure(res, "INVALID_INPUT", "idempotencyKey is required");
     }
 
-    const wallet = await depositWallet(userId, amount, idempotencyKey);
+    const replaySafeResponse = await depositWallet(userId, amount, idempotencyKey) as {
+      success: true;
+      data: unknown;
+      error: null;
+    };
 
-    return res.json({ success: true, data: wallet, error: null });
+    return success(res, replaySafeResponse.data);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to deposit funds";
-    return res.status(400).json({ success: false, error: message });
+    return failure(res, "INTERNAL_ERROR", message);
   }
 }
 
@@ -74,26 +81,34 @@ export async function withdrawFromWallet(req: Request, res: Response) {
   try {
     const userId = getRequestUserId(req);
     const amount = parsePositiveDecimal(req.body?.amount);
-    const idempotencyKey = req.body?.idempotencyKey;
+    const idempotencyKey = extractIdempotencyKey(req);
 
     if (typeof userId !== "string" || !userId.trim()) {
-      return res.status(400).json({ success: false, error: "userId is required" });
+      return failure(res, "INVALID_INPUT", "userId is required");
     }
 
     if (amount === null) {
-      return res.status(400).json({ success: false, error: "Valid amount is required" });
+      return failure(res, "INVALID_INPUT", "Valid amount is required");
     }
 
     if (typeof idempotencyKey !== "string" || !idempotencyKey.trim()) {
-      return res.status(400).json({ success: false, error: "idempotencyKey is required" });
+      return failure(res, "INVALID_INPUT", "idempotencyKey is required");
     }
 
-    const wallet = await withdrawWallet(userId, amount, idempotencyKey);
+    const replaySafeResponse = await withdrawWallet(userId, amount, idempotencyKey) as {
+      success: true;
+      data: unknown;
+      error: null;
+    };
 
-    return res.json({ success: true, data: wallet, error: null });
+    return success(res, replaySafeResponse.data);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to withdraw funds";
-    return res.status(400).json({ success: false, error: message });
+    await logError(err instanceof Error ? err : new Error(message), {
+      endpoint: "/wallet/withdraw",
+      userId: getRequestUserId(req) ?? null,
+    });
+    return failure(res, "INTERNAL_ERROR", message);
   }
 }
 
@@ -102,7 +117,7 @@ export async function getWalletTransactions(req: Request, res: Response) {
     const userId = getRequestUserId(req);
 
     if (typeof userId !== "string" || !userId.trim()) {
-      return res.status(400).json({ success: false, error: "userId is required" });
+      return failure(res, "INVALID_INPUT", "userId is required");
     }
 
     const limitRaw = Number(req.query.limit);
@@ -127,16 +142,16 @@ export async function getWalletTransactions(req: Request, res: Response) {
       },
     });
 
-    return res.json({ success: true, data: transactions, error: null });
+    return success(res, transactions);
   } catch {
-    return res.status(500).json({ success: false, error: "Failed to fetch transactions" });
+    return failure(res, "INTERNAL_ERROR", "Failed to fetch transactions");
   }
 }
 
 export async function getTransactions(req: Request, res: Response) {
   try {
     const userId = getRequestUserId(req);
-    if (!userId) return res.status(401).json({ success: false, data: {}, error: "Unauthorized" });
+    if (!userId) return failure(res, "UNAUTHORIZED", "Unauthorized");
     // Pagination
     const page = Math.max(1, parseInt(req.query.page as string) || 1);
     const pageSize = Math.min(100, Math.max(1, parseInt(req.query.pageSize as string) || 20));
@@ -168,23 +183,19 @@ export async function getTransactions(req: Request, res: Response) {
       }),
     ]);
     // Unity-optimized response
-    return res.json({
-      success: true,
-      data: {
-        page,
-        pageSize,
-        total,
-        transactions: transactions.map(t => ({
-          id: t.id,
-          type: t.type,
-          amount: t.amount.toNumber(),
-          balanceAfter: t.balanceAfter.toNumber(),
-          createdAt: t.createdAt.toISOString(),
-        })),
-      },
-      error: null,
+    return success(res, {
+      page,
+      pageSize,
+      total,
+      transactions: transactions.map(t => ({
+        id: t.id,
+        type: t.type,
+        amount: t.amount.toNumber(),
+        balanceAfter: t.balanceAfter.toNumber(),
+        createdAt: t.createdAt.toISOString(),
+      })),
     });
   } catch (err) {
-    return res.status(500).json({ success: false, data: {}, error: "Failed to fetch transactions" });
+    return failure(res, "INTERNAL_ERROR", "Failed to fetch transactions");
   }
 }

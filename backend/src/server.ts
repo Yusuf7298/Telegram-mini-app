@@ -1,6 +1,6 @@
-import "dotenv/config";
 import express, { NextFunction, Request, Response } from "express";
 import cors from "cors";
+import { env } from "./config/env";
 import userRoutes from "./modules/user/user.routes";
 import walletRoutes from "./modules/wallet/wallet.routes";
 import gameRoutes from "./modules/game/game.routes";
@@ -13,9 +13,22 @@ import { authMiddleware } from "./middleware/auth.middleware";
 
 const app = express();
 
+const isProduction = env.NODE_ENV === "production";
+
+if (isProduction) {
+  const configuredOrigins = [env.FRONTEND_URL, env.FRONTEND_URL_STAGING].filter(
+    (origin): origin is string => Boolean(origin),
+  );
+
+  const invalidOrigin = configuredOrigins.find((origin) => !origin.toLowerCase().startsWith("https://"));
+  if (invalidOrigin) {
+    throw new Error(`In production, frontend origins must use HTTPS. Invalid origin: ${invalidOrigin}`);
+  }
+}
+
 const allowedOrigins = [
-  process.env.FRONTEND_URL,
-  process.env.FRONTEND_URL_STAGING,
+  env.FRONTEND_URL,
+  env.FRONTEND_URL_STAGING,
   "https://web.telegram.org",
   "https://t.me",
 ].filter((origin): origin is string => Boolean(origin));
@@ -35,11 +48,26 @@ const corsOptions: cors.CorsOptions = {
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Device-Id", "Idempotency-Key"],
 };
 
 app.use(cors(corsOptions));
 app.options(/.*/, cors(corsOptions));
+
+app.disable("x-powered-by");
+app.use((_req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()");
+  res.setHeader("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'");
+
+  if (isProduction) {
+    res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload");
+  }
+
+  next();
+});
 
 import { decimalSerializer } from './middleware/decimalSerializer';
 app.use(express.json());
@@ -84,11 +112,11 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
   });
 });
 
-const port = Number(process.env.PORT) || 5000;
+const port = Number(env.PORT) || 5000;
 
-if (process.env.VERCEL !== "1") {
+if (env.VERCEL !== "1") {
   app.listen(port, () => {
-    console.log(`Server running on port ${port}`);
+    console.info(`Server running on port ${port}`);
   });
 }
 

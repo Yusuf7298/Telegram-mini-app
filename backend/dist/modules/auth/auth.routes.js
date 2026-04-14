@@ -2,6 +2,9 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const auth_controller_1 = require("./auth.controller");
+const rateLimitRedis_1 = require("../../middleware/rateLimitRedis");
+const validate_1 = require("../../middleware/validate");
+const auth_validator_1 = require("../../validators/auth.validator");
 const router = (0, express_1.Router)();
-router.post("/telegram-login", auth_controller_1.telegramLogin);
+router.post("/telegram-login", (0, validate_1.validateBody)(auth_validator_1.telegramLoginSchema), rateLimitRedis_1.rateLimitRedisMiddleware, auth_controller_1.telegramLogin);
 exports.default = router;

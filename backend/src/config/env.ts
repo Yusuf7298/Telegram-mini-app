@@ -8,17 +8,23 @@ const envSchema = z.object({
   JWT_SECRET: z.string().min(32, 'JWT_SECRET must be at least 32 characters'),
   REDIS_URL: z.string().min(1, 'REDIS_URL is required'),
   TELEGRAM_BOT_TOKEN: z.string().min(1, 'TELEGRAM_BOT_TOKEN is required'),
+  ADMIN_SECRET: z.string().min(1, 'ADMIN_SECRET is required'),
   ADMIN_JWT_SECRET: z.string().min(32, 'ADMIN_JWT_SECRET must be at least 32 characters'),
+  FRONTEND_URL: z.string().url().optional(),
+  FRONTEND_URL_STAGING: z.string().url().optional(),
+  PORT: z.string().optional(),
+  VERCEL: z.string().optional(),
+  NODE_ENV: z.enum(['development', 'test', 'production', 'staging'], {
+    message: 'NODE_ENV must be one of development, test, production, staging',
+  }),
 });
 
-const parsed = envSchema.safeParse(process.env);
+const runtimeEnv = globalThis['process']['env'] as NodeJS.ProcessEnv;
+const parsed = envSchema.safeParse(runtimeEnv);
 
 if (!parsed.success) {
-  // Print all validation errors and exit
-  console.error('❌ Invalid environment configuration:');
-  for (const err of parsed.error.issues) {
-    console.error(`- ${err.message}`);
-  }
+  const reasons = parsed.error.issues.map((issue) => issue.message).join('; ');
+  console.error(`Invalid environment configuration: ${reasons}`);
   process.exit(1);
 }
 

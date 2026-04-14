@@ -26,16 +26,20 @@ const FIRST_PLAY_REWARD_MAX = 251;
 const RAPID_ONBOARDING_WINDOW_MS = 10 * 1000;
 const MIN_PLAY_INTERVAL_MS = 300;
 const RESTRICTED_RISK_THRESHOLD = 70;
-function randomInt(min, max) {
-    return crypto_1.default.randomInt(min, max);
-}
-function assertFirstPlayRewardRange(isFirstPlay, reward) {
-    if (!isFirstPlay)
-        return;
+function assertFirstPlayRewardRange(reward) {
     const value = reward.toNumber();
     if (value < FIRST_PLAY_REWARD_MIN || value > FIRST_PLAY_REWARD_MAX - 1) {
         throw new Error("CRITICAL: First play reward violation");
     }
+}
+function logFirstPlayReward(userId, action, reward) {
+    console.info("[FirstPlayReward]", {
+        userId,
+        action,
+        reward: reward.toString(),
+        min: FIRST_PLAY_REWARD_MIN,
+        max: FIRST_PLAY_REWARD_MAX - 1,
+    });
 }
 function applyOnboardingRtpControl(reward, boxPrice, onboardingRtpModifier) {
     const factor = new client_1.Prisma.Decimal(onboardingRtpModifier);
@@ -120,6 +124,26 @@ async function enforceGameplayPacing(tx, user, action) {
 async function openBox(userId, boxId, idempotencyKey, ip, deviceId) {
     return (0, lock_1.withUserLock)(userId, async () => {
         return (0, withTransactionRetry_1.withTransactionRetry)(db_1.prisma, async (tx) => {
+            const existing = await (0, idempotency_service_1.checkIdempotencyKey)({ id: idempotencyKey, userId, tx });
+            if (existing?.status === "COMPLETED") {
+                return existing.response;
+            }
+            if (existing?.status === "PENDING") {
+                throw new Error("Idempotent request is still processing");
+            }
+            try {
+                await (0, idempotency_service_1.createIdempotencyKey)({ id: idempotencyKey, userId, action: "openBox", tx });
+            }
+            catch (err) {
+                const duplicate = await (0, idempotency_service_1.checkIdempotencyKey)({ id: idempotencyKey, userId, tx });
+                if (duplicate?.status === "COMPLETED") {
+                    return duplicate.response;
+                }
+                if (duplicate?.status === "PENDING") {
+                    throw new Error("Idempotent request is still processing");
+                }
+                throw err;
+            }
             const user = await tx.user.findUnique({
                 where: { id: userId },
                 select: {
@@ -140,17 +164,6 @@ async function openBox(userId, boxId, idempotencyKey, ip, deviceId) {
             }
             await enforceGameplayPacing(tx, { id: user.id, lastPlayTimestamp: user.lastPlayTimestamp }, "openBox");
             const isOnboarding = user.totalPlaysCount < WAITLIST_UNLOCK_PLAYS;
-            let idempKey;
-            try {
-                idempKey = await (0, idempotency_service_1.createIdempotencyKey)({ id: idempotencyKey, userId, action: "openBox", tx });
-            }
-            catch (err) {
-                idempKey = await (0, idempotency_service_1.checkIdempotencyKey)({ id: idempotencyKey, userId, tx });
-                if (idempKey && idempKey.status === "COMPLETED") {
-                    return idempKey.response ?? idempKey.rewardAmount;
-                }
-                throw err;
-            }
             await tx.boxOpenLog.create({
                 data: { userId, ip: ip || "", deviceId, action: "openBox" },
             });
@@ -211,7 +224,9 @@ async function openBox(userId, boxId, idempotencyKey, ip, deviceId) {
             const isFirstPlay = user.totalPlaysCount === 0;
             let reward;
             if (isFirstPlay) {
-                reward = new client_1.Prisma.Decimal(randomInt(FIRST_PLAY_REWARD_MIN, FIRST_PLAY_REWARD_MAX));
+                reward = new client_1.Prisma.Decimal(crypto_1.default.randomInt(150, 251));
+                assertFirstPlayRewardRange(reward);
+                logFirstPlayReward(userId, "openBox", reward);
             }
             else {
                 const rewardObj = await (0, reward_service_1.generateRewardFromDB)(boxId, tx);
@@ -225,7 +240,6 @@ async function openBox(userId, boxId, idempotencyKey, ip, deviceId) {
                     await (0, rtp_service_1.adjustRewardProbabilities)(false);
                 }
             }
-            assertFirstPlayRewardRange(isFirstPlay, reward);
             await tx.wallet.update({
                 where: { userId },
                 data: { cashBalance: { increment: reward } },
@@ -299,15 +313,50 @@ async function openBox(userId, boxId, idempotencyKey, ip, deviceId) {
                     }
                 }
             }
-            await (0, idempotency_service_1.completeIdempotencyKey)({ id: idempotencyKey, userId, response: reward, tx });
+            const completedResponse = await (0, idempotency_service_1.completeIdempotencyKey)({
+                id: idempotencyKey,
+                userId,
+                response: {
+                    reward: reward.toString(),
+                },
+                metadata: {
+                    boxId,
+                    action: "openBox",
+                    walletSnapshot: {
+                        cashBalance: walletAfterReward.cashBalance,
+                        bonusBalance: walletAfterReward.bonusBalance,
+                    },
+                },
+                tx,
+            });
             await (0, auditLog_service_1.logAudit)({ userId, action: "box_open", details: { boxId, reward: reward.toString() }, tx });
-            return reward;
+            return completedResponse;
         });
     });
 }
 async function openFreeBox(userId, idempotencyKey, ip, deviceId) {
     return (0, lock_1.withUserLock)(userId, async () => {
         return (0, withTransactionRetry_1.withTransactionRetry)(db_1.prisma, async (tx) => {
+            const existing = await (0, idempotency_service_1.checkIdempotencyKey)({ id: idempotencyKey, userId, tx });
+            if (existing?.status === "COMPLETED") {
+                return existing.response;
+            }
+            if (existing?.status === "PENDING") {
+                throw new Error("Idempotent request is still processing");
+            }
+            try {
+                await (0, idempotency_service_1.createIdempotencyKey)({ id: idempotencyKey, userId, action: "openFreeBox", tx });
+            }
+            catch (err) {
+                const duplicate = await (0, idempotency_service_1.checkIdempotencyKey)({ id: idempotencyKey, userId, tx });
+                if (duplicate?.status === "COMPLETED") {
+                    return duplicate.response;
+                }
+                if (duplicate?.status === "PENDING") {
+                    throw new Error("Idempotent request is still processing");
+                }
+                throw err;
+            }
             const user = await tx.user.findUnique({
                 where: { id: userId },
                 select: {
@@ -328,17 +377,6 @@ async function openFreeBox(userId, idempotencyKey, ip, deviceId) {
                 throw new Error("Account restricted");
             }
             await enforceGameplayPacing(tx, { id: user.id, lastPlayTimestamp: user.lastPlayTimestamp }, "openFreeBox");
-            let idempKey;
-            try {
-                idempKey = await (0, idempotency_service_1.createIdempotencyKey)({ id: idempotencyKey, userId, action: "openFreeBox", tx });
-            }
-            catch (err) {
-                idempKey = await (0, idempotency_service_1.checkIdempotencyKey)({ id: idempotencyKey, userId, tx });
-                if (idempKey && idempKey.status === "COMPLETED") {
-                    return idempKey.response ?? idempKey.rewardAmount;
-                }
-                throw err;
-            }
             const markUsed = await tx.user.updateMany({
                 where: { id: userId, freeBoxUsed: false },
                 data: { freeBoxUsed: true },
@@ -353,9 +391,12 @@ async function openFreeBox(userId, idempotencyKey, ip, deviceId) {
             if (!wallet)
                 throw new Error("Wallet not found");
             const isFirstPlay = user.totalPlaysCount === 0;
-            const firstPlayReward = new client_1.Prisma.Decimal(randomInt(FIRST_PLAY_REWARD_MIN, FIRST_PLAY_REWARD_MAX));
-            const reward = isFirstPlay ? firstPlayReward : new client_1.Prisma.Decimal(0);
-            assertFirstPlayRewardRange(isFirstPlay, reward);
+            let reward = new client_1.Prisma.Decimal(0);
+            if (isFirstPlay) {
+                reward = new client_1.Prisma.Decimal(crypto_1.default.randomInt(150, 251));
+                assertFirstPlayRewardRange(reward);
+                logFirstPlayReward(userId, "openFreeBox", reward);
+            }
             const walletAfterReward = await tx.wallet.update({
                 where: { userId },
                 data: { cashBalance: { increment: reward } },
@@ -384,14 +425,34 @@ async function openFreeBox(userId, idempotencyKey, ip, deviceId) {
             if (progress.totalPlaysCount >= WAITLIST_UNLOCK_PLAYS) {
                 await detectRapidOnboardingCompletion(tx, userId);
             }
-            await (0, idempotency_service_1.completeIdempotencyKey)({ id: idempotencyKey, userId, response: reward, tx });
-            return {
-                reward,
-                totalPlaysCount: progress.totalPlaysCount,
-                waitlistBonusUnlocked: progress.waitlistBonusUnlocked || progress.totalPlaysCount >= WAITLIST_UNLOCK_PLAYS,
-                waitlistBonusAmount: WAITLIST_BONUS_AMOUNT,
-                playsRequiredToUnlock: WAITLIST_UNLOCK_PLAYS,
-            };
+            const completedResponse = await (0, idempotency_service_1.completeIdempotencyKey)({
+                id: idempotencyKey,
+                userId,
+                response: {
+                    reward: reward.toString(),
+                    totalPlaysCount: progress.totalPlaysCount,
+                    waitlistBonusUnlocked: progress.waitlistBonusUnlocked || progress.totalPlaysCount >= WAITLIST_UNLOCK_PLAYS,
+                    waitlistBonusAmount: WAITLIST_BONUS_AMOUNT.toString(),
+                    playsRequiredToUnlock: WAITLIST_UNLOCK_PLAYS,
+                    walletSnapshot: {
+                        cashBalance: walletAfterReward.cashBalance,
+                        bonusBalance: walletAfterReward.bonusBalance,
+                    },
+                },
+                metadata: {
+                    action: "openFreeBox",
+                    totalPlaysCount: progress.totalPlaysCount,
+                    waitlistBonusUnlocked: progress.waitlistBonusUnlocked || progress.totalPlaysCount >= WAITLIST_UNLOCK_PLAYS,
+                    waitlistBonusAmount: WAITLIST_BONUS_AMOUNT,
+                    playsRequiredToUnlock: WAITLIST_UNLOCK_PLAYS,
+                    walletSnapshot: {
+                        cashBalance: walletAfterReward.cashBalance,
+                        bonusBalance: walletAfterReward.bonusBalance,
+                    },
+                },
+                tx,
+            });
+            return completedResponse;
         });
     });
 }

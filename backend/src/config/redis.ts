@@ -1,7 +1,7 @@
-import "dotenv/config";
 import Redis from "ioredis";
+import { env } from "./env";
 
-const redisUrl = process.env.REDIS_URL;
+const redisUrl = env.REDIS_URL;
 
 if (!redisUrl) {
   throw new Error("REDIS_URL is not set");

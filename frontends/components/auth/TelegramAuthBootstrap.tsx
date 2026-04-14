@@ -3,11 +3,19 @@
 import { useEffect, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import api from '@/lib/api';
+import { ApiResponse } from '@/lib/apiTypes';
+import { User } from '@/lib/apiService';
 import { getTelegramInitData, getTelegramWebApp } from '@/lib/telegram';
+import { getStoredToken, getStoredUser } from '@/lib/tokenStorage';
 import { useAuthStore } from '@/store/authStore';
 
 const authRoutes = ['/login', '/signup', '/forgot-password', '/reset-password', '/verify-otp'];
 const bootstrapFlagKey = 'boxplay_telegram_bootstrap_done';
+
+type TelegramLoginData = {
+  token: string;
+  user: User;
+};
 
 export default function TelegramAuthBootstrap({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -26,16 +34,11 @@ export default function TelegramAuthBootstrap({ children }: { children: React.Re
 
       const webApp = getTelegramWebApp();
       const initData = getTelegramInitData();
-      const storedToken = localStorage.getItem('boxplay_token');
-      const storedUser = localStorage.getItem('boxplay_user');
+      const storedToken = getStoredToken();
+      const storedUser = getStoredUser();
 
       if (storedToken && storedUser) {
-        try {
-          login(JSON.parse(storedUser), storedToken);
-        } catch {
-          localStorage.removeItem('boxplay_token');
-          localStorage.removeItem('boxplay_user');
-        }
+        login(storedUser, storedToken);
 
         setReady(true);
         return;
@@ -52,9 +55,9 @@ export default function TelegramAuthBootstrap({ children }: { children: React.Re
       }
 
       try {
-        const { data } = await api.post('/auth/telegram-login', { initData });
-        const authUser = data?.data?.user ?? data?.user;
-        const authToken = data?.data?.token ?? data?.token;
+        const { data } = await api.post<ApiResponse<TelegramLoginData>>('/auth/telegram-login', { initData });
+        const authUser = data.data.user;
+        const authToken = data.data.token;
 
         if (authUser && authToken) {
           login(authUser, authToken);

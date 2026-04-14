@@ -8,6 +8,8 @@ exports.getTransactions = getTransactions;
 const db_1 = require("../../config/db");
 const wallet_service_1 = require("./wallet.service");
 const client_1 = require("@prisma/client");
+const responder_1 = require("../../utils/responder");
+const idempotencyKey_1 = require("../../utils/idempotencyKey");
 function getRequestUserId(req) {
     return req.userId;
 }
@@ -32,67 +34,67 @@ async function getWallet(req, res) {
     try {
         const userId = getRequestUserId(req);
         if (typeof userId !== "string" || !userId.trim()) {
-            return res.status(400).json({ success: false, data: {}, error: "userId is required" });
+            return (0, responder_1.failure)(res, "INVALID_INPUT", "userId is required");
         }
         const wallet = await db_1.prisma.wallet.findUnique({ where: { userId } });
         if (!wallet) {
-            return res.status(404).json({ success: false, data: {}, error: "Wallet not found" });
+            return (0, responder_1.failure)(res, "NOT_FOUND", "Wallet not found");
         }
-        return res.json({ success: true, data: wallet, error: null });
+        return (0, responder_1.success)(res, wallet);
     }
     catch (err) {
-        return res.status(500).json({ success: false, data: {}, error: "Failed to fetch wallet" });
+        return (0, responder_1.failure)(res, "INTERNAL_ERROR", "Failed to fetch wallet");
     }
 }
 async function depositToWallet(req, res) {
     try {
         const userId = getRequestUserId(req);
         const amount = parsePositiveDecimal(req.body?.amount);
-        const idempotencyKey = req.body?.idempotencyKey;
+        const idempotencyKey = (0, idempotencyKey_1.extractIdempotencyKey)(req);
         if (typeof userId !== "string" || !userId.trim()) {
-            return res.status(400).json({ success: false, error: "userId is required" });
+            return (0, responder_1.failure)(res, "INVALID_INPUT", "userId is required");
         }
         if (amount === null) {
-            return res.status(400).json({ success: false, error: "Valid amount is required" });
+            return (0, responder_1.failure)(res, "INVALID_INPUT", "Valid amount is required");
         }
         if (typeof idempotencyKey !== "string" || !idempotencyKey.trim()) {
-            return res.status(400).json({ success: false, error: "idempotencyKey is required" });
+            return (0, responder_1.failure)(res, "INVALID_INPUT", "idempotencyKey is required");
         }
-        const wallet = await (0, wallet_service_1.depositWallet)(userId, amount, idempotencyKey);
-        return res.json({ success: true, data: wallet, error: null });
+        const replaySafeResponse = await (0, wallet_service_1.depositWallet)(userId, amount, idempotencyKey);
+        return (0, responder_1.success)(res, replaySafeResponse.data);
     }
     catch (err) {
         const message = err instanceof Error ? err.message : "Failed to deposit funds";
-        return res.status(400).json({ success: false, error: message });
+        return (0, responder_1.failure)(res, "INTERNAL_ERROR", message);
     }
 }
 async function withdrawFromWallet(req, res) {
     try {
         const userId = getRequestUserId(req);
         const amount = parsePositiveDecimal(req.body?.amount);
-        const idempotencyKey = req.body?.idempotencyKey;
+        const idempotencyKey = (0, idempotencyKey_1.extractIdempotencyKey)(req);
         if (typeof userId !== "string" || !userId.trim()) {
-            return res.status(400).json({ success: false, error: "userId is required" });
+            return (0, responder_1.failure)(res, "INVALID_INPUT", "userId is required");
         }
         if (amount === null) {
-            return res.status(400).json({ success: false, error: "Valid amount is required" });
+            return (0, responder_1.failure)(res, "INVALID_INPUT", "Valid amount is required");
         }
         if (typeof idempotencyKey !== "string" || !idempotencyKey.trim()) {
-            return res.status(400).json({ success: false, error: "idempotencyKey is required" });
+            return (0, responder_1.failure)(res, "INVALID_INPUT", "idempotencyKey is required");
         }
-        const wallet = await (0, wallet_service_1.withdrawWallet)(userId, amount, idempotencyKey);
-        return res.json({ success: true, data: wallet, error: null });
+        const replaySafeResponse = await (0, wallet_service_1.withdrawWallet)(userId, amount, idempotencyKey);
+        return (0, responder_1.success)(res, replaySafeResponse.data);
     }
     catch (err) {
         const message = err instanceof Error ? err.message : "Failed to withdraw funds";
-        return res.status(400).json({ success: false, error: message });
+        return (0, responder_1.failure)(res, "INTERNAL_ERROR", message);
     }
 }
 async function getWalletTransactions(req, res) {
     try {
         const userId = getRequestUserId(req);
         if (typeof userId !== "string" || !userId.trim()) {
-            return res.status(400).json({ success: false, error: "userId is required" });
+            return (0, responder_1.failure)(res, "INVALID_INPUT", "userId is required");
         }
         const limitRaw = Number(req.query.limit);
         const limit = Number.isFinite(limitRaw)
@@ -114,17 +116,17 @@ async function getWalletTransactions(req, res) {
                 },
             },
         });
-        return res.json({ success: true, data: transactions, error: null });
+        return (0, responder_1.success)(res, transactions);
     }
     catch {
-        return res.status(500).json({ success: false, error: "Failed to fetch transactions" });
+        return (0, responder_1.failure)(res, "INTERNAL_ERROR", "Failed to fetch transactions");
     }
 }
 async function getTransactions(req, res) {
     try {
         const userId = getRequestUserId(req);
         if (!userId)
-            return res.status(401).json({ success: false, data: {}, error: "Unauthorized" });
+            return (0, responder_1.failure)(res, "UNAUTHORIZED", "Unauthorized");
         // Pagination
         const page = Math.max(1, parseInt(req.query.page) || 1);
         const pageSize = Math.min(100, Math.max(1, parseInt(req.query.pageSize) || 20));
@@ -160,24 +162,20 @@ async function getTransactions(req, res) {
             }),
         ]);
         // Unity-optimized response
-        return res.json({
-            success: true,
-            data: {
-                page,
-                pageSize,
-                total,
-                transactions: transactions.map(t => ({
-                    id: t.id,
-                    type: t.type,
-                    amount: t.amount.toNumber(),
-                    balanceAfter: t.balanceAfter.toNumber(),
-                    createdAt: t.createdAt.toISOString(),
-                })),
-            },
-            error: null,
+        return (0, responder_1.success)(res, {
+            page,
+            pageSize,
+            total,
+            transactions: transactions.map(t => ({
+                id: t.id,
+                type: t.type,
+                amount: t.amount.toNumber(),
+                balanceAfter: t.balanceAfter.toNumber(),
+                createdAt: t.createdAt.toISOString(),
+            })),
         });
     }
     catch (err) {
-        return res.status(500).json({ success: false, data: {}, error: "Failed to fetch transactions" });
+        return (0, responder_1.failure)(res, "INTERNAL_ERROR", "Failed to fetch transactions");
     }
 }

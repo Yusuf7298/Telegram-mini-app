@@ -1,30 +1,29 @@
 import { AxiosRequestConfig } from 'axios';
 import api from './api';
+import { ApiResponse } from './apiTypes';
 
 export interface OpenBoxRequest {
   boxId: string;
   idempotencyKey: string;
 }
-export interface OpenBoxResponse {
-  success: boolean;
-  data: unknown;
-  error: string | null;
+
+export interface OpenBoxData {
+  reward: number | string;
 }
 
-export interface WalletResponse {
-  success: boolean;
-  data: {
-    id: string;
-    userId: string;
-    cashBalance: number;
-    bonusBalance: number;
-  };
-  error: string | null;
+export interface WalletData {
+  id: string;
+  userId: string;
+  cashBalance: number;
+  bonusBalance: number;
 }
+
+export type UserRole = 'USER' | 'ADMIN';
 
 // --- Entity Types ---
 export interface User {
   id: string;
+  role: UserRole;
   username: string;
   phone: string;
   avatar?: string;
@@ -50,10 +49,10 @@ export interface Transaction {
 // --- API Service ---
 const ApiService = {
   openBox: (data: OpenBoxRequest, config?: AxiosRequestConfig) =>
-    api.post<OpenBoxResponse>('/game/open-box', data, config),
+    api.post<ApiResponse<OpenBoxData>>('/game/open-box', data, config),
 
   getWallet: (config?: AxiosRequestConfig) =>
-    api.get<WalletResponse>('/wallet', config),
+    api.get<ApiResponse<WalletData>>('/wallet', config),
 };
 
 export default ApiService;

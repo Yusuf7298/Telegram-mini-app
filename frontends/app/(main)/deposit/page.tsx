@@ -3,14 +3,26 @@ import { useState } from "react";
 import { ArrowLeft, BellIcon, CreditCard, Landmark } from "lucide-react";
 import { useRouter } from "next/navigation";
 
+type DepositMethod = "card" | "bank";
+
+type DepositForm = {
+  name: string;
+  card: string;
+  expiry: string;
+  cvv: string;
+  amount: string;
+};
+
+type DepositFieldErrors = Partial<Record<keyof DepositForm, string>>;
+
 const methods = [
   { label: "Debit Card", value: "card", icon: CreditCard },
   { label: "Bank Transfer", value: "bank", icon: Landmark },
 ];
 
 export default function DepositPage() {
-  const [method, setMethod] = useState("card");
-  const [form, setForm] = useState({
+  const [method, setMethod] = useState<DepositMethod>("card");
+  const [form, setForm] = useState<DepositForm>({
     name: "",
     card: "",
     expiry: "",
@@ -19,11 +31,11 @@ export default function DepositPage() {
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [fieldErrors, setFieldErrors] = useState<any>({});
+  const [fieldErrors, setFieldErrors] = useState<DepositFieldErrors>({});
   const router = useRouter();
 
   const validate = () => {
-    const errs: any = {};
+    const errs: DepositFieldErrors = {};
     if (!form.name) errs.name = "Name is required";
     if (!form.card.match(/^\d{16}$/)) errs.card = "Card number must be 16 digits";
     if (!form.expiry.match(/^(0[1-9]|1[0-2])\/(\d{2})$/)) errs.expiry = "MM/YY format";
@@ -35,7 +47,8 @@ export default function DepositPage() {
   };
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setForm({ ...form, [e.target.name]: e.target.value });
+    const field = e.target.name as keyof DepositForm;
+    setForm((prev) => ({ ...prev, [field]: e.target.value }));
   };
 
   const handleSubmit = async (e: React.FormEvent) => {

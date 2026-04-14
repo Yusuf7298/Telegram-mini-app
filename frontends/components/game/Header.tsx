@@ -3,6 +3,7 @@ import { BellIcon } from '@heroicons/react/24/outline';
 
 interface HeaderProps {
   user?: { username: string; avatar: string };
+  title?: string;
 }
 
 export default function Header({ user, title }: HeaderProps) {

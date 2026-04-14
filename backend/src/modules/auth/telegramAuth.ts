@@ -1,9 +1,10 @@
 import crypto from "crypto";
+import { env } from "../../config/env";
 
 const MAX_AUTH_AGE_SECONDS = 60 * 5;
 
 export function verifyTelegramData(initData: string) {
-  const botToken = process.env.TELEGRAM_BOT_TOKEN;
+  const botToken = env.TELEGRAM_BOT_TOKEN;
   if (!botToken) {
     throw new Error("Telegram auth is not configured");
   }

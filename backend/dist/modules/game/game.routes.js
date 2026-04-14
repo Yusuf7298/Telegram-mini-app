@@ -7,7 +7,9 @@ const replayProtection_middleware_1 = require("../../middleware/replayProtection
 const validate_1 = require("../../middleware/validate");
 const game_validator_1 = require("../../validators/game.validator");
 const auth_middleware_1 = require("../../middleware/auth.middleware");
+const requestAudit_middleware_1 = require("../../middleware/requestAudit.middleware");
 const router = (0, express_1.Router)();
+router.use(requestAudit_middleware_1.requestAuditMiddleware);
 router.get("/boxes", game_controller_1.getBoxesController);
 router.post("/open-box", auth_middleware_1.authMiddleware, rateLimitRedis_1.rateLimitRedisMiddleware, replayProtection_middleware_1.replayProtectionMiddleware, (0, validate_1.validateBody)(game_validator_1.openBoxSchema), game_controller_1.openBoxController);
 router.post("/free-box", auth_middleware_1.authMiddleware, rateLimitRedis_1.rateLimitRedisMiddleware, replayProtection_middleware_1.replayProtectionMiddleware, (0, validate_1.validateBody)(game_validator_1.freeBoxSchema), game_controller_1.freeBoxController);

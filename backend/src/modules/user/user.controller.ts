@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import { prisma } from "../../config/db";
 import { randomUUID } from "crypto";
 import crypto from "crypto";
+import { failure, success } from "../../utils/responder";
 
 type AuthenticatedRequest = Request & { userId?: string };
 
@@ -14,7 +15,7 @@ export async function registerUser(req: Request, res: Response) {
     const { platformId, username, referrerId } = req.body;
 
     if (!isValidString(platformId)) {
-      return res.status(400).json({ success: false, error: "platformId is required" });
+      return failure(res, "INVALID_INPUT", "platformId is required");
     }
 
     const normalizedReferrerId = isValidString(referrerId)
@@ -28,7 +29,7 @@ export async function registerUser(req: Request, res: Response) {
       });
 
       if (!referrer) {
-        return res.status(400).json({ success: false, error: "Invalid referrerId" });
+        return failure(res, "INVALID_INPUT", "Invalid referrerId");
       }
     }
 
@@ -36,7 +37,7 @@ export async function registerUser(req: Request, res: Response) {
       where: { platformId },
     });
 
-    if (existing) return res.json({ success: true, data: existing });
+    if (existing) return success(res, existing);
 
     const user = await prisma.user.create({
       data: {
@@ -60,9 +61,9 @@ export async function registerUser(req: Request, res: Response) {
       },
     });
 
-    return res.json({ success: true, data: user });
+    return success(res, user);
   } catch (err) {
-    return res.status(500).json({ success: false, error: "Failed to create user" });
+    return failure(res, "INTERNAL_ERROR", "Failed to create user");
   }
 }
 
@@ -71,7 +72,7 @@ export async function getReferrals(req: AuthenticatedRequest, res: Response) {
     const userId = req.userId;
 
     if (!userId?.trim()) {
-      return res.status(400).json({ success: false, error: "userId is required" });
+      return failure(res, "INVALID_INPUT", "userId is required");
     }
 
     const user = await prisma.user.findUnique({
@@ -80,12 +81,12 @@ export async function getReferrals(req: AuthenticatedRequest, res: Response) {
     });
 
     if (!user) {
-      return res.status(404).json({ success: false, error: "User not found" });
+      return failure(res, "NOT_FOUND", "User not found");
     }
 
-    return res.json({ success: true, data: user });
+    return success(res, user);
   } catch (err) {
-    return res.status(500).json({ success: false, error: "Failed to fetch referrals" });
+    return failure(res, "INTERNAL_ERROR", "Failed to fetch referrals");
   }
 }
 
@@ -94,7 +95,7 @@ export async function getCurrentUser(req: AuthenticatedRequest, res: Response) {
     const userId = req.userId;
 
     if (!userId?.trim()) {
-      return res.status(400).json({ success: false, error: "userId is required" });
+      return failure(res, "INVALID_INPUT", "userId is required");
     }
 
     const user = await prisma.user.findUnique({
@@ -102,11 +103,11 @@ export async function getCurrentUser(req: AuthenticatedRequest, res: Response) {
     });
 
     if (!user) {
-      return res.status(404).json({ success: false, error: "User not found" });
+      return failure(res, "NOT_FOUND", "User not found");
     }
 
-    return res.json({ success: true, data: user });
+    return success(res, user);
   } catch (err) {
-    return res.status(500).json({ success: false, error: "Failed to fetch user" });
+    return failure(res, "INTERNAL_ERROR", "Failed to fetch user");
   }
 }

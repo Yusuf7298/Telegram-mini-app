@@ -4,8 +4,18 @@ import Link from "next/link";
 import Image from "next/image";
 import { Input } from "@/components/ui/Input";
 
+type SignupForm = {
+  firstName: string;
+  lastName: string;
+  mobile: string;
+  username: string;
+  password: string;
+};
+
+type SignupFieldErrors = Partial<Record<keyof SignupForm, string>>;
+
 export default function SignupPage() {
-  const [form, setForm] = useState({
+  const [form, setForm] = useState<SignupForm>({
     firstName: "",
     lastName: "",
     mobile: "",
@@ -14,10 +24,10 @@ export default function SignupPage() {
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [fieldErrors, setFieldErrors] = useState<any>({});
+  const [fieldErrors, setFieldErrors] = useState<SignupFieldErrors>({});
 
   const validate = () => {
-    const errs: any = {};
+    const errs: SignupFieldErrors = {};
     if (!form.firstName) errs.firstName = "First name is required";
     if (!form.lastName) errs.lastName = "Last name is required";
     if (!form.mobile.match(/^\+?\d{10,15}$/)) errs.mobile = "Enter a valid mobile number";
@@ -29,7 +39,8 @@ export default function SignupPage() {
   };
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setForm({ ...form, [e.target.name]: e.target.value });
+    const field = e.target.name as keyof SignupForm;
+    setForm((prev) => ({ ...prev, [field]: e.target.value }));
   };
 
   const handleSubmit = async (e: React.FormEvent) => {

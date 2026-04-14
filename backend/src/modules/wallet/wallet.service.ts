@@ -4,6 +4,8 @@ import { withUserLock } from "../../utils/lock";
 import { withTransactionRetry } from "../../services/withTransactionRetry";
 import { createIdempotencyKey, checkIdempotencyKey, completeIdempotencyKey } from "../../services/idempotency.service";
 import { logSuspiciousAction } from "../../services/suspiciousActionLog.service";
+import { logStructuredEvent } from "../../services/logger";
+import { recordWithdrawAttempt } from "../../services/fraudDetection.service";
 
 const WITHDRAW_BLOCK_RISK_THRESHOLD = 70;
 const WITHDRAW_MIN_PLAYS = 5;
@@ -23,13 +25,38 @@ export async function depositWallet(
 
   return withUserLock(userId, async () => {
     return withTransactionRetry(prisma, async (tx) => {
-      let idempKey;
+      await logStructuredEvent("financial_operation", {
+        userId,
+        action: "deposit_attempt",
+        amount: amount.toString(),
+        idempotencyKey,
+        timestamp: new Date().toISOString(),
+      });
+
+      const existing = await checkIdempotencyKey({ id: idempotencyKey, userId, tx });
+      if (existing?.status === "COMPLETED") {
+        await logStructuredEvent("financial_operation", {
+          userId,
+          action: "idempotency_replay",
+          amount: amount.toString(),
+          idempotencyKey,
+          timestamp: new Date().toISOString(),
+        });
+        return existing.response;
+      }
+      if (existing?.status === "PENDING") {
+        throw new Error("Idempotent request is still processing");
+      }
+
       try {
-        idempKey = await createIdempotencyKey({ id: idempotencyKey, userId, action: "walletDeposit", tx });
-      } catch (err: any) {
-        idempKey = await checkIdempotencyKey({ id: idempotencyKey, userId, tx });
-        if (idempKey && idempKey.status === "COMPLETED") {
-          return idempKey.response as Record<string, unknown>;
+        await createIdempotencyKey({ id: idempotencyKey, userId, action: "walletDeposit", tx });
+      } catch (err) {
+        const duplicate = await checkIdempotencyKey({ id: idempotencyKey, userId, tx });
+        if (duplicate?.status === "COMPLETED") {
+          return duplicate.response;
+        }
+        if (duplicate?.status === "PENDING") {
+          throw new Error("Idempotent request is still processing");
         }
         throw err;
       }
@@ -40,9 +67,25 @@ export async function depositWallet(
       const before = wallet.cashBalance.plus(wallet.bonusBalance);
       const nextCash = wallet.cashBalance.plus(amount);
 
+      await logStructuredEvent("financial_operation", {
+        userId,
+        action: "deposit_mutation_before",
+        amount: amount.toString(),
+        idempotencyKey,
+        timestamp: new Date().toISOString(),
+      });
+
       const updated = await tx.wallet.updateMany({
         where: { userId, cashBalance: wallet.cashBalance, bonusBalance: wallet.bonusBalance },
         data: { cashBalance: nextCash },
+      });
+
+      await logStructuredEvent("financial_operation", {
+        userId,
+        action: "deposit_mutation_after",
+        amount: amount.toString(),
+        idempotencyKey,
+        timestamp: new Date().toISOString(),
       });
 
       if (updated.count === 0) {
@@ -62,9 +105,38 @@ export async function depositWallet(
       const walletAfter = await tx.wallet.findUnique({ where: { userId } });
       if (!walletAfter) throw new Error("Wallet not found");
 
-      await completeIdempotencyKey({ id: idempotencyKey, userId, response: walletAfter, tx });
-      return walletAfter;
+      const completedResponse = await completeIdempotencyKey({
+        id: idempotencyKey,
+        userId,
+        response: walletAfter,
+        metadata: {
+          action: "walletDeposit",
+          amount: amount.toString(),
+          walletSnapshot: walletAfter,
+        },
+        tx,
+      });
+
+      await logStructuredEvent("financial_operation", {
+        userId,
+        action: "deposit_success",
+        amount: amount.toString(),
+        idempotencyKey,
+        timestamp: new Date().toISOString(),
+      });
+
+      return completedResponse;
     });
+  }).catch(async (err) => {
+    await logStructuredEvent("financial_operation", {
+      userId,
+      action: "deposit_failed",
+      amount: amount.toString(),
+      idempotencyKey,
+      timestamp: new Date().toISOString(),
+      message: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
   });
 }
 
@@ -78,13 +150,38 @@ export async function withdrawWallet(
 
   return withUserLock(userId, async () => {
     return withTransactionRetry(prisma, async (tx) => {
-      let idempKey;
+      await logStructuredEvent("financial_operation", {
+        userId,
+        action: "withdraw_attempt",
+        amount: amount.toString(),
+        idempotencyKey,
+        timestamp: new Date().toISOString(),
+      });
+
+      const existing = await checkIdempotencyKey({ id: idempotencyKey, userId, tx });
+      if (existing?.status === "COMPLETED") {
+        await logStructuredEvent("financial_operation", {
+          userId,
+          action: "idempotency_replay",
+          amount: amount.toString(),
+          idempotencyKey,
+          timestamp: new Date().toISOString(),
+        });
+        return existing.response;
+      }
+      if (existing?.status === "PENDING") {
+        throw new Error("Idempotent request is still processing");
+      }
+
       try {
-        idempKey = await createIdempotencyKey({ id: idempotencyKey, userId, action: "walletWithdraw", tx });
-      } catch (err: any) {
-        idempKey = await checkIdempotencyKey({ id: idempotencyKey, userId, tx });
-        if (idempKey && idempKey.status === "COMPLETED") {
-          return idempKey.response as Record<string, unknown>;
+        await createIdempotencyKey({ id: idempotencyKey, userId, action: "walletWithdraw", tx });
+      } catch (err) {
+        const duplicate = await checkIdempotencyKey({ id: idempotencyKey, userId, tx });
+        if (duplicate?.status === "COMPLETED") {
+          return duplicate.response;
+        }
+        if (duplicate?.status === "PENDING") {
+          throw new Error("Idempotent request is still processing");
         }
         throw err;
       }
@@ -92,6 +189,7 @@ export async function withdrawWallet(
       const user = await tx.user.findUnique({
         where: { id: userId },
         select: {
+          isFrozen: true,
           accountStatus: true,
           riskScore: true,
           totalPlaysCount: true,
@@ -102,11 +200,16 @@ export async function withdrawWallet(
         throw new Error("User not found");
       }
 
-      if (user.accountStatus === "FROZEN" || user.riskScore > WITHDRAW_BLOCK_RISK_THRESHOLD) {
+      if (user.isFrozen || user.accountStatus === "FROZEN" || user.riskScore > WITHDRAW_BLOCK_RISK_THRESHOLD) {
         await logSuspiciousAction({
           userId,
           type: "withdrawal_risk",
-          metadata: { reason: "high_risk_withdraw_attempt", riskScore: user.riskScore, accountStatus: user.accountStatus },
+          metadata: {
+            reason: user.isFrozen ? "frozen_account_withdraw_attempt" : "high_risk_withdraw_attempt",
+            riskScore: user.riskScore,
+            accountStatus: user.accountStatus,
+            isFrozen: user.isFrozen,
+          },
           tx,
         });
         throw new Error("Withdrawals are restricted for this account");
@@ -152,6 +255,18 @@ export async function withdrawWallet(
       const wallet = await tx.wallet.findUnique({ where: { userId } });
       if (!wallet) throw new Error("Wallet not found");
 
+      const withdrawSuspicion = recordWithdrawAttempt(userId);
+      if (withdrawSuspicion.isSuspicious) {
+        await logStructuredEvent("fraud_detected", {
+          userId,
+          reason: withdrawSuspicion.reason,
+          type: "withdraw_frequency",
+          amount: amount.toString(),
+          idempotencyKey,
+          timestamp: new Date().toISOString(),
+        });
+      }
+
       const withdrawableBonus = wallet.bonusLocked ? new Prisma.Decimal(0) : wallet.bonusBalance;
       const withdrawableTotal = wallet.cashBalance.plus(withdrawableBonus);
       if (withdrawableTotal.lt(amount)) throw new Error("Insufficient withdrawable balance");
@@ -162,9 +277,25 @@ export async function withdrawWallet(
       const nextCash = wallet.cashBalance.minus(cashUsed);
       const nextBonus = wallet.bonusBalance.minus(bonusUsed);
 
+      await logStructuredEvent("financial_operation", {
+        userId,
+        action: "withdraw_mutation_before",
+        amount: amount.toString(),
+        idempotencyKey,
+        timestamp: new Date().toISOString(),
+      });
+
       const updated = await tx.wallet.updateMany({
         where: { userId, cashBalance: wallet.cashBalance, bonusBalance: wallet.bonusBalance },
         data: { cashBalance: nextCash, bonusBalance: nextBonus },
+      });
+
+      await logStructuredEvent("financial_operation", {
+        userId,
+        action: "withdraw_mutation_after",
+        amount: amount.toString(),
+        idempotencyKey,
+        timestamp: new Date().toISOString(),
       });
 
       if (updated.count === 0) {
@@ -189,9 +320,38 @@ export async function withdrawWallet(
       const walletAfter = await tx.wallet.findUnique({ where: { userId } });
       if (!walletAfter) throw new Error("Wallet not found");
 
-      await completeIdempotencyKey({ id: idempotencyKey, userId, response: walletAfter, tx });
-      return walletAfter;
+      const completedResponse = await completeIdempotencyKey({
+        id: idempotencyKey,
+        userId,
+        response: walletAfter,
+        metadata: {
+          action: "walletWithdraw",
+          amount: amount.toString(),
+          walletSnapshot: walletAfter,
+        },
+        tx,
+      });
+
+      await logStructuredEvent("financial_operation", {
+        userId,
+        action: "withdraw_success",
+        amount: amount.toString(),
+        idempotencyKey,
+        timestamp: new Date().toISOString(),
+      });
+
+      return completedResponse;
     });
+  }).catch(async (err) => {
+    await logStructuredEvent("financial_operation", {
+      userId,
+      action: "withdraw_failed",
+      amount: amount.toString(),
+      idempotencyKey,
+      timestamp: new Date().toISOString(),
+      message: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
   });
 }
 

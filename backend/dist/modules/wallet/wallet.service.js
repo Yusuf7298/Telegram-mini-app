@@ -25,14 +25,23 @@ async function depositWallet(userId, amountInput, idempotencyKey) {
         throw new Error("Amount must be greater than zero");
     return (0, lock_1.withUserLock)(userId, async () => {
         return (0, withTransactionRetry_1.withTransactionRetry)(db_1.prisma, async (tx) => {
-            let idempKey;
+            const existing = await (0, idempotency_service_1.checkIdempotencyKey)({ id: idempotencyKey, userId, tx });
+            if (existing?.status === "COMPLETED") {
+                return existing.response;
+            }
+            if (existing?.status === "PENDING") {
+                throw new Error("Idempotent request is still processing");
+            }
             try {
-                idempKey = await (0, idempotency_service_1.createIdempotencyKey)({ id: idempotencyKey, userId, action: "walletDeposit", tx });
+                await (0, idempotency_service_1.createIdempotencyKey)({ id: idempotencyKey, userId, action: "walletDeposit", tx });
             }
             catch (err) {
-                idempKey = await (0, idempotency_service_1.checkIdempotencyKey)({ id: idempotencyKey, userId, tx });
-                if (idempKey && idempKey.status === "COMPLETED") {
-                    return idempKey.response;
+                const duplicate = await (0, idempotency_service_1.checkIdempotencyKey)({ id: idempotencyKey, userId, tx });
+                if (duplicate?.status === "COMPLETED") {
+                    return duplicate.response;
+                }
+                if (duplicate?.status === "PENDING") {
+                    throw new Error("Idempotent request is still processing");
                 }
                 throw err;
             }
@@ -60,8 +69,18 @@ async function depositWallet(userId, amountInput, idempotencyKey) {
             const walletAfter = await tx.wallet.findUnique({ where: { userId } });
             if (!walletAfter)
                 throw new Error("Wallet not found");
-            await (0, idempotency_service_1.completeIdempotencyKey)({ id: idempotencyKey, userId, response: walletAfter, tx });
-            return walletAfter;
+            const completedResponse = await (0, idempotency_service_1.completeIdempotencyKey)({
+                id: idempotencyKey,
+                userId,
+                response: walletAfter,
+                metadata: {
+                    action: "walletDeposit",
+                    amount: amount.toString(),
+                    walletSnapshot: walletAfter,
+                },
+                tx,
+            });
+            return completedResponse;
         });
     });
 }
@@ -71,14 +90,23 @@ async function withdrawWallet(userId, amountInput, idempotencyKey) {
         throw new Error("Amount must be greater than zero");
     return (0, lock_1.withUserLock)(userId, async () => {
         return (0, withTransactionRetry_1.withTransactionRetry)(db_1.prisma, async (tx) => {
-            let idempKey;
+            const existing = await (0, idempotency_service_1.checkIdempotencyKey)({ id: idempotencyKey, userId, tx });
+            if (existing?.status === "COMPLETED") {
+                return existing.response;
+            }
+            if (existing?.status === "PENDING") {
+                throw new Error("Idempotent request is still processing");
+            }
             try {
-                idempKey = await (0, idempotency_service_1.createIdempotencyKey)({ id: idempotencyKey, userId, action: "walletWithdraw", tx });
+                await (0, idempotency_service_1.createIdempotencyKey)({ id: idempotencyKey, userId, action: "walletWithdraw", tx });
             }
             catch (err) {
-                idempKey = await (0, idempotency_service_1.checkIdempotencyKey)({ id: idempotencyKey, userId, tx });
-                if (idempKey && idempKey.status === "COMPLETED") {
-                    return idempKey.response;
+                const duplicate = await (0, idempotency_service_1.checkIdempotencyKey)({ id: idempotencyKey, userId, tx });
+                if (duplicate?.status === "COMPLETED") {
+                    return duplicate.response;
+                }
+                if (duplicate?.status === "PENDING") {
+                    throw new Error("Idempotent request is still processing");
                 }
                 throw err;
             }
@@ -172,8 +200,18 @@ async function withdrawWallet(userId, amountInput, idempotencyKey) {
             const walletAfter = await tx.wallet.findUnique({ where: { userId } });
             if (!walletAfter)
                 throw new Error("Wallet not found");
-            await (0, idempotency_service_1.completeIdempotencyKey)({ id: idempotencyKey, userId, response: walletAfter, tx });
-            return walletAfter;
+            const completedResponse = await (0, idempotency_service_1.completeIdempotencyKey)({
+                id: idempotencyKey,
+                userId,
+                response: walletAfter,
+                metadata: {
+                    action: "walletWithdraw",
+                    amount: amount.toString(),
+                    walletSnapshot: walletAfter,
+                },
+                tx,
+            });
+            return completedResponse;
         });
     });
 }

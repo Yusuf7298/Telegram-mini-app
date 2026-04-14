@@ -78,7 +78,9 @@ export default function VerifyOtpPage() {
             {otp.map((val, i) => (
               <input
                 key={i}
-                ref={el => (inputs.current[i] = el)}
+                ref={el => {
+                  inputs.current[i] = el;
+                }}
                 type="text"
                 inputMode="numeric"
                 maxLength={1}

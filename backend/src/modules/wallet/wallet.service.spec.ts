@@ -1,5 +1,11 @@
 // @ts-nocheck
-process.env.DATABASE_URL ||= 'postgresql://postgres:postgres@localhost:5432/upworks_test';
+import { env } from "../../config/env";
+
+const testDatabaseUrl = process.env.TEST_DATABASE_URL?.trim() || process.env.TEST_API_URL?.trim();
+if (!testDatabaseUrl) {
+  throw new Error('TEST_DATABASE_URL or TEST_API_URL must be set for wallet tests');
+}
+env.DATABASE_URL = testDatabaseUrl;
 
 import { prisma } from '../../config/db';
 import { D } from '../../utils/money';

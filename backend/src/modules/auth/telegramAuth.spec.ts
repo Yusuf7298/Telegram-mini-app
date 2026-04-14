@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import { verifyTelegramData } from "./telegramAuth";
+import { env } from "../../config/env";
 
 type InitDataInput = {
   botToken: string;
@@ -38,15 +39,15 @@ function createTelegramInitData(input: InitDataInput) {
 }
 
 describe("verifyTelegramData", () => {
-  const originalBotToken = process.env.TELEGRAM_BOT_TOKEN;
+  const originalBotToken = env.TELEGRAM_BOT_TOKEN;
   const botToken = "test-bot-token";
 
   beforeEach(() => {
-    process.env.TELEGRAM_BOT_TOKEN = botToken;
+    env.TELEGRAM_BOT_TOKEN = botToken;
   });
 
   afterAll(() => {
-    process.env.TELEGRAM_BOT_TOKEN = originalBotToken;
+    env.TELEGRAM_BOT_TOKEN = originalBotToken;
   });
 
   it("accepts valid Telegram initData", () => {

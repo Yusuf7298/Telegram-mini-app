@@ -2,7 +2,7 @@ import { Request, Response } from "express";
 import { prisma } from "../../config/db";
 import { logReferral, checkReferralLimits } from "../../services/referral.service";
 import { logSuspiciousAction } from "../../services/suspiciousActionLog.service";
-import { successResponse, errorResponse } from "../../utils/apiResponse";
+import { failure, success } from "../../utils/responder";
 
 function getRequestUserId(req: Request): string | undefined {
   return (req as Request & { userId?: string }).userId;
@@ -11,14 +11,14 @@ function getRequestUserId(req: Request): string | undefined {
 export async function getReferralCode(req: Request, res: Response) {
   try {
     const userId = getRequestUserId(req);
-    if (!userId) return res.status(401).json(errorResponse("Unauthorized"));
+    if (!userId) return failure(res, "UNAUTHORIZED", "Unauthorized");
 
     const user = await prisma.user.findUnique({ where: { id: userId } });
-    if (!user) return res.status(404).json(errorResponse("User not found"));
+    if (!user) return failure(res, "NOT_FOUND", "User not found");
 
-    return res.json(successResponse({ referralCode: user.referralCode }));
+    return success(res, { referralCode: user.referralCode });
   } catch {
-    return res.status(500).json(errorResponse("Failed to get referral code"));
+    return failure(res, "INTERNAL_ERROR", "Failed to get referral code");
   }
 }
 
@@ -29,21 +29,21 @@ export async function useReferralCode(req: Request, res: Response) {
     const ip = req.ip || "unknown";
 
     if (!userId || !referralCode) {
-      return res.status(400).json(errorResponse("Missing user or referral code"));
+      return failure(res, "INVALID_INPUT", "Missing user or referral code");
     }
 
     const user = await prisma.user.findUnique({ where: { id: userId } });
-    if (!user) return res.status(404).json(errorResponse("User not found"));
-    if (user.referralCode === referralCode) return res.status(400).json(errorResponse("Cannot refer yourself"));
-    if (user.referredById) return res.status(400).json(errorResponse("Referral already used"));
+    if (!user) return failure(res, "NOT_FOUND", "User not found");
+    if (user.referralCode === referralCode) return failure(res, "INVALID_INPUT", "Cannot refer yourself");
+    if (user.referredById) return failure(res, "INVALID_INPUT", "Referral already used");
 
     const referrer = await prisma.user.findFirst({ where: { referralCode } });
-    if (!referrer) return res.status(404).json(errorResponse("Invalid referral code"));
+    if (!referrer) return failure(res, "NOT_FOUND", "Invalid referral code");
 
     const existingLog = await prisma.referralLog.findUnique({
       where: { referrerId_referredId: { referrerId: referrer.id, referredId: user.id } },
     });
-    if (existingLog) return res.status(400).json(errorResponse("Duplicate referral"));
+    if (existingLog) return failure(res, "INVALID_INPUT", "Duplicate referral");
 
     const safeDeviceId = deviceId || "unknown";
     const allowed = await checkReferralLimits({
@@ -67,7 +67,7 @@ export async function useReferralCode(req: Request, res: Response) {
         type: "referral_fraud",
         metadata: { referrerId: referrer.id, ip, deviceId: safeDeviceId },
       });
-      return res.status(429).json(errorResponse("Referral limit exceeded. Try again later."));
+      return failure(res, "RATE_LIMIT", "Referral limit exceeded. Try again later.");
     }
 
     await prisma.user.update({
@@ -79,8 +79,8 @@ export async function useReferralCode(req: Request, res: Response) {
       },
     });
 
-    return res.json(successResponse({}));
+    return success(res, {});
   } catch {
-    return res.status(500).json(errorResponse("Failed to use referral code"));
+    return failure(res, "INTERNAL_ERROR", "Failed to use referral code");
   }
 }

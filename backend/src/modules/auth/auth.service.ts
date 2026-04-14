@@ -1,6 +1,8 @@
 import jwt from "jsonwebtoken";
+import { env } from "../../config/env";
 import { prisma } from "../../config/db";
 import { randomUUID } from "crypto";
+import crypto from "crypto";
 
 const WAITLIST_BONUS_AMOUNT = 1000;
 
@@ -22,7 +24,29 @@ function parseTelegramUser(initData: string): TelegramUserPayload {
   return userData;
 }
 
-export async function authWithTelegram(initData: string) {
+function computeDeviceHash(params: { deviceId?: string; userAgent?: string; ip?: string }) {
+  const raw = [params.deviceId || "", params.userAgent || "", params.ip || ""].join("|");
+  return crypto.createHash("sha256").update(raw).digest("hex");
+}
+
+async function logSuspiciousDeviceBehavior(
+  userId: string,
+  action: string,
+  details: Record<string, unknown>
+) {
+  await prisma.suspiciousActionLog.create({
+    data: {
+      userId,
+      action,
+      details: JSON.stringify(details),
+    },
+  });
+}
+
+export async function authWithTelegram(
+  initData: string,
+  context?: { ip?: string; deviceId?: string; userAgent?: string }
+) {
   const userData = parseTelegramUser(initData);
 
   const platformId = String(userData.id);
@@ -30,15 +54,26 @@ export async function authWithTelegram(initData: string) {
     typeof userData.username === "string" && userData.username.trim()
       ? userData.username
       : null;
+  const normalizedIp = context?.ip || "unknown";
+  const normalizedDeviceId = context?.deviceId?.trim() || undefined;
+  const deviceHash = computeDeviceHash({
+    deviceId: normalizedDeviceId,
+    userAgent: context?.userAgent,
+    ip: normalizedIp,
+  });
 
   const referralCode = `REF-${randomUUID().replace(/-/g, "").slice(0, 12)}`;
 
-  return prisma.user.upsert({
+  const user = await prisma.user.upsert({
     where: { platformId },
     create: {
       platformId,
       username,
       referralCode,
+      signupDeviceId: normalizedDeviceId,
+      deviceHash,
+      createdIp: normalizedIp,
+      lastLoginIp: normalizedIp,
       waitlistBonusGranted: true,
       waitlistBonusUnlocked: false,
       totalPlaysCount: 0,
@@ -51,12 +86,58 @@ export async function authWithTelegram(initData: string) {
     },
     update: {
       username,
+      deviceHash,
+      lastLoginIp: normalizedIp,
+      ...(normalizedDeviceId ? { signupDeviceId: normalizedDeviceId } : {}),
     },
   });
+
+  const [sameDeviceAccounts, recentDeviceSwitches] = await Promise.all([
+    prisma.user.count({
+      where: {
+        deviceHash,
+        id: { not: user.id },
+      },
+    }),
+    prisma.suspiciousActionLog.count({
+      where: {
+        userId: user.id,
+        action: "device_switched",
+        flaggedAt: {
+          gte: new Date(Date.now() - 10 * 60 * 1000),
+        },
+      },
+    }),
+  ]);
+
+  if (sameDeviceAccounts > 0) {
+    await logSuspiciousDeviceBehavior(user.id, "multi_account_same_device", {
+      deviceHash,
+      linkedAccounts: sameDeviceAccounts,
+      ip: normalizedIp,
+    });
+  }
+
+  if (user.deviceHash && user.deviceHash !== deviceHash) {
+    await logSuspiciousDeviceBehavior(user.id, "device_switched", {
+      previousDeviceHash: user.deviceHash,
+      nextDeviceHash: deviceHash,
+      ip: normalizedIp,
+    });
+
+    if (recentDeviceSwitches >= 2) {
+      await logSuspiciousDeviceBehavior(user.id, "rapid_device_switching", {
+        switchesInLast10Min: recentDeviceSwitches + 1,
+        ip: normalizedIp,
+      });
+    }
+  }
+
+  return user;
 }
 
 export function generateToken(userId: string) {
-  const secret = process.env.JWT_SECRET;
+  const secret = env.JWT_SECRET;
 
   if (!secret) {
     throw new Error("JWT_SECRET is not set");

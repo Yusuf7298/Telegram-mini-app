@@ -32,3 +32,22 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+html,
+body {
+  min-height: 100%;
+  overflow-x: hidden;
+}
+
+/* Telegram WebView-safe viewport height helper */
+.min-h-telegram-screen {
+  min-height: 100vh;
+  min-height: 100dvh;
+  min-height: -webkit-fill-available;
+}
+
+/* Safe-area padding helper for iOS/Telegram in-app browser */
+.safe-screen-padding {
+  padding-top: max(env(safe-area-inset-top), 1rem);
+  padding-bottom: max(env(safe-area-inset-bottom), 1rem);
+}

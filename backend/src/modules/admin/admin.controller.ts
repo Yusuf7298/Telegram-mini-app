@@ -11,24 +11,67 @@ import {
   unfreezeUser,
   revokeReward as revokeRewardService,
 } from "../../services/admin.service";
-import { verifySystemIntegrity, getSystemMetrics } from "../../services/systemStats.service";
+import { verifySystemIntegrity, getSystemMetrics, verifyWalletConstraintIntegrity } from "../../services/systemStats.service";
+import { runRuntimeCheck } from "../../services/runtimeCheck.service";
+import { failure, success } from "../../utils/responder";
+import { getFraudEvents, getHighRiskUsers } from "../../services/adminMonitoring.service";
 
 export async function getMetrics(_req: Request, res: Response) {
   try {
     const metrics = await getSystemMetrics();
-    return res.json(metrics);
+    return success(res, metrics);
   } catch {
-    return res.status(500).json({ error: "Failed to fetch metrics" });
+    return failure(res, "INTERNAL_ERROR", "Failed to fetch metrics");
+  }
+}
+
+export async function getFraudEventsHandler(_req: Request, res: Response) {
+  try {
+    const events = await getFraudEvents();
+    return success(res, events);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Failed to fetch fraud events";
+    return failure(res, "INTERNAL_ERROR", message);
+  }
+}
+
+export async function getHighRiskUsersHandler(_req: Request, res: Response) {
+  try {
+    const users = await getHighRiskUsers();
+    return success(res, users);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Failed to fetch high-risk users";
+    return failure(res, "INTERNAL_ERROR", message);
   }
 }
 
 export async function verifySystemIntegrityHandler(_req: Request, res: Response) {
   try {
     const result = await verifySystemIntegrity();
-    return res.json(result);
+    return success(res, result);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Verification failed";
-    return res.status(500).json({ error: message });
+    return failure(res, "INTERNAL_ERROR", message);
+  }
+}
+
+export async function verifyWalletConstraintIntegrityHandler(_req: Request, res: Response) {
+  try {
+    const result = await verifyWalletConstraintIntegrity();
+    return success(res, result);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Verification failed";
+    return failure(res, "INTERNAL_ERROR", message);
+  }
+}
+
+export async function runtimeCheckHandler(_req: Request, res: Response) {
+  try {
+    const result = await runRuntimeCheck();
+    return success(res, result);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Runtime check failed";
+    return failure(res, "INTERNAL_ERROR", message);
   }
 }
 
@@ -36,10 +79,10 @@ export async function createReward(req: Request, res: Response) {
   try {
     const tx = (req as any).tx ?? prisma;
     const reward = await createBoxReward(req.body, tx);
-    return res.status(201).json(reward);
+    return success(res, reward, 201);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Failed to create reward";
-    return res.status(400).json({ error: message });
+    return failure(res, "INVALID_INPUT", message);
   }
 }
 
@@ -47,10 +90,10 @@ export async function updateReward(req: Request, res: Response) {
   try {
     const tx = (req as any).tx ?? prisma;
     const reward = await updateBoxReward(String(req.params.id), req.body, tx);
-    return res.json(reward);
+    return success(res, reward);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Failed to update reward";
-    return res.status(400).json({ error: message });
+    return failure(res, "INVALID_INPUT", message);
   }
 }
 
@@ -58,10 +101,10 @@ export async function deleteReward(req: Request, res: Response) {
   try {
     const tx = (req as any).tx ?? prisma;
     await deleteBoxReward(String(req.params.id), tx);
-    return res.json({ success: true });
+    return success(res, {});
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Failed to delete reward";
-    return res.status(400).json({ error: message });
+    return failure(res, "INVALID_INPUT", message);
   }
 }
 
@@ -69,10 +112,10 @@ export async function listRewardsByBox(req: Request, res: Response) {
   try {
     const tx = (req as any).tx ?? prisma;
     const rewards = await listBoxRewardsByBox(String(req.params.boxId), tx);
-    return res.json(rewards);
+    return success(res, rewards);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Failed to list rewards";
-    return res.status(400).json({ error: message });
+    return failure(res, "INTERNAL_ERROR", message);
   }
 }
 
@@ -80,14 +123,14 @@ export async function freezeUserHandler(req: Request, res: Response) {
   try {
     const userId = req.body?.targetId || req.body?.userId;
     if (!userId) {
-      return res.status(400).json({ success: false, error: "userId is required" });
+      return failure(res, "INVALID_INPUT", "userId is required");
     }
 
     await freezeUserService(String(userId));
-    return res.json({ success: true });
+    return success(res, {});
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Failed to freeze user";
-    return res.status(400).json({ success: false, error: message });
+    return failure(res, "INTERNAL_ERROR", message);
   }
 }
 
@@ -95,14 +138,14 @@ export async function unfreezeUserHandler(req: Request, res: Response) {
   try {
     const userId = req.body?.targetId || req.body?.userId;
     if (!userId) {
-      return res.status(400).json({ success: false, error: "userId is required" });
+      return failure(res, "INVALID_INPUT", "userId is required");
     }
 
     await unfreezeUser(String(userId));
-    return res.json({ success: true });
+    return success(res, {});
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Failed to unfreeze user";
-    return res.status(400).json({ success: false, error: message });
+    return failure(res, "INTERNAL_ERROR", message);
   }
 }
 
@@ -112,14 +155,14 @@ export async function revokeRewardHandler(req: Request, res: Response) {
     const reason = req.body?.reason || "admin_action";
 
     if (!transactionId) {
-      return res.status(400).json({ success: false, error: "transactionId is required" });
+      return failure(res, "INVALID_INPUT", "transactionId is required");
     }
 
     await revokeRewardService(String(transactionId), String(reason));
-    return res.json({ success: true });
+    return success(res, {});
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Failed to revoke reward";
-    return res.status(400).json({ success: false, error: message });
+    return failure(res, "INTERNAL_ERROR", message);
   }
 }
 
@@ -132,5 +175,5 @@ export async function revokeReward(req: Request, res: Response) {
 }
 
 export async function updateConfig(_req: Request, res: Response) {
-  return res.json({ success: true });
+  return success(res, {});
 }

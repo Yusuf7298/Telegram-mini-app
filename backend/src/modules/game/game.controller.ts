@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import { getBoxes, openBox, openFreeBox } from "./game.service";
-import { successResponse, errorResponse } from "../../utils/apiResponse";
+import { failure, success } from "../../utils/responder";
+import { extractIdempotencyKey } from "../../utils/idempotencyKey";
 
 function getRequestUserId(req: Request): string | undefined {
   return (req as Request & { userId?: string }).userId;
@@ -8,40 +9,47 @@ function getRequestUserId(req: Request): string | undefined {
 
 export async function openBoxController(req: Request, res: Response) {
   try {
-    const { boxId, idempotencyKey } = req.body;
+    const { boxId } = req.body;
+    const idempotencyKey = extractIdempotencyKey(req);
     const userId = getRequestUserId(req);
 
     if (!userId) {
-      return res.status(400).json(errorResponse("userId is required"));
+      return failure(res, "INVALID_INPUT", "userId is required");
     }
 
     if (!boxId) {
-      return res.status(400).json(errorResponse("boxId is required"));
+      return failure(res, "INVALID_INPUT", "boxId is required");
     }
 
     if (!idempotencyKey) {
-      return res.status(400).json(errorResponse("idempotencyKey is required"));
+      return failure(res, "INVALID_INPUT", "idempotencyKey is required");
     }
 
-    const reward = await openBox(userId, boxId, idempotencyKey, req.ip, req.headers["x-device-id"] as string | undefined);
-    return res.json(successResponse(reward));
+    const replaySafeResponse = await openBox(
+      userId,
+      boxId,
+      idempotencyKey,
+      req.ip,
+      req.headers["x-device-id"] as string | undefined
+    ) as { success: true; data: unknown; error: null };
+    return success(res, replaySafeResponse.data);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Something went wrong";
-    return res.status(400).json(errorResponse(message));
+    return failure(res, "INTERNAL_ERROR", message);
   }
 }
 
 export async function freeBoxController(req: Request, res: Response) {
   try {
     const userId = getRequestUserId(req);
-    const { idempotencyKey } = req.body;
+    const idempotencyKey = extractIdempotencyKey(req);
 
     if (!userId) {
-      return res.status(400).json(errorResponse("userId is required"));
+      return failure(res, "INVALID_INPUT", "userId is required");
     }
 
     if (!idempotencyKey) {
-      return res.status(400).json(errorResponse("idempotencyKey is required"));
+      return failure(res, "INVALID_INPUT", "idempotencyKey is required");
     }
 
     const freeBoxResult = await openFreeBox(
@@ -49,19 +57,19 @@ export async function freeBoxController(req: Request, res: Response) {
       idempotencyKey,
       req.ip,
       req.headers["x-device-id"] as string | undefined
-    );
-    return res.json(successResponse(freeBoxResult));
+    ) as { success: true; data: unknown; error: null };
+    return success(res, freeBoxResult.data);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Something went wrong";
-    return res.status(400).json(errorResponse(message));
+    return failure(res, "INTERNAL_ERROR", message);
   }
 }
 
 export async function getBoxesController(_req: Request, res: Response) {
   try {
     const boxes = await getBoxes();
-    return res.json(successResponse(boxes));
+    return success(res, boxes);
   } catch {
-    return res.status(500).json(errorResponse("Failed to load boxes"));
+    return failure(res, "INTERNAL_ERROR", "Failed to load boxes");
   }
 }

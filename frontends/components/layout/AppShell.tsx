@@ -9,10 +9,11 @@ const authRoutes = ['/login', '/signup', '/forgot-password', '/reset-password', 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const isAuthRoute = authRoutes.some((route) => pathname?.startsWith(route));
+  const isAdminRoute = pathname?.startsWith('/admin');
 
   return (
     <TelegramAuthBootstrap>
-      {isAuthRoute ? <>{children}</> : <MobileLayout>{children}</MobileLayout>}
+      {isAuthRoute || isAdminRoute ? <>{children}</> : <MobileLayout>{children}</MobileLayout>}
     </TelegramAuthBootstrap>
   );
 }

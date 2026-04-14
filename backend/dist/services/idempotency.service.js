@@ -6,7 +6,16 @@ exports.checkIdempotencyKey = checkIdempotencyKey;
 // NEW: IdempotencyKey service
 const db_1 = require("../config/db");
 const client_1 = require("@prisma/client");
+const logger_1 = require("./logger");
 const IDEMPOTENCY_TTL_MS = 10 * 60 * 1000;
+function toDecimalString(value) {
+    try {
+        return new client_1.Prisma.Decimal(value ?? 0).toString();
+    }
+    catch {
+        return new client_1.Prisma.Decimal(0).toString();
+    }
+}
 function toSerializable(value) {
     if (value instanceof client_1.Prisma.Decimal) {
         return value.toString();
@@ -48,6 +57,47 @@ function extractRewardAmount(response) {
     }
     return new client_1.Prisma.Decimal(0);
 }
+function isSuccessEnvelope(response) {
+    return Boolean(response &&
+        typeof response === "object" &&
+        response.success === true &&
+        Object.prototype.hasOwnProperty.call(response, "data") &&
+        response.error === null);
+}
+function toSuccessEnvelope(response) {
+    if (isSuccessEnvelope(response)) {
+        return {
+            success: true,
+            data: toSerializable(response.data),
+            error: null,
+        };
+    }
+    return {
+        success: true,
+        data: toSerializable(response),
+        error: null,
+    };
+}
+function normalizeIdempotencyResponse(response, metadata) {
+    const envelope = toSuccessEnvelope(response);
+    if (!metadata || Object.keys(metadata).length === 0) {
+        return envelope;
+    }
+    const data = envelope.data && typeof envelope.data === "object" && !Array.isArray(envelope.data)
+        ? { ...envelope.data }
+        : { value: envelope.data };
+    return {
+        success: true,
+        data: {
+            ...data,
+            metadata: {
+                ...(typeof data.metadata === "object" && data.metadata ? data.metadata : {}),
+                ...toSerializable(metadata),
+            },
+        },
+        error: null,
+    };
+}
 async function createIdempotencyKey({ id, userId, action, tx, }) {
     const client = tx || db_1.prisma;
     const now = new Date();
@@ -69,21 +119,36 @@ async function createIdempotencyKey({ id, userId, action, tx, }) {
     if (insertResult.count === 0) {
         throw new Error("Idempotency key already exists");
     }
+    await (0, logger_1.logStructuredEvent)("idempotency_created", {
+        userId,
+        endpoint: action,
+        idempotencyKey: id,
+        action,
+        timestamp: new Date().toISOString(),
+    });
     return client.idempotencyKey.findUnique({ where: { id } });
 }
-async function completeIdempotencyKey({ id, userId, response, tx, }) {
+async function completeIdempotencyKey({ id, userId, response, metadata, tx, }) {
     const client = tx || db_1.prisma;
+    const existingKey = await client.idempotencyKey.findUnique({ where: { id } });
+    if (!existingKey) {
+        throw new Error("Idempotency key not found");
+    }
+    if (existingKey.userId !== userId) {
+        throw new Error("Idempotency key user mismatch");
+    }
     const rewardAmount = extractRewardAmount(response);
-    const serializableResponse = toSerializable(response);
+    const normalizedResponse = normalizeIdempotencyResponse(response, metadata);
     await client.idempotencyKey.update({
         where: { id },
         data: {
             status: "COMPLETED",
             rewardAmount,
-            response: serializableResponse,
+            response: normalizedResponse,
             expiresAt: new Date(),
         },
     });
+    return normalizedResponse;
 }
 async function checkIdempotencyKey({ id, userId, tx, }) {
     const client = tx || db_1.prisma;
@@ -94,5 +159,18 @@ async function checkIdempotencyKey({ id, userId, tx, }) {
         throw new Error("Idempotency key user mismatch");
     if (key.status === "PENDING" && key.expiresAt && key.expiresAt < new Date())
         throw new Error("Idempotency key expired");
+    if (key.status === "COMPLETED") {
+        await (0, logger_1.logStructuredEvent)("idempotency_hit", {
+            userId,
+            endpoint: key.action,
+            idempotencyKey: id,
+            action: key.action,
+            timestamp: new Date().toISOString(),
+        });
+        return {
+            ...key,
+            response: normalizeIdempotencyResponse(key.response),
+        };
+    }
     return key;
 }

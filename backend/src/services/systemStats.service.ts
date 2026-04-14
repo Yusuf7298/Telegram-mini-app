@@ -1,4 +1,5 @@
 import { Prisma } from "@prisma/client";
+import { randomUUID } from "crypto";
 import { prisma } from "../config/db";
 import { D } from "../utils/money";
 
@@ -76,4 +77,85 @@ export async function verifySystemIntegrity() {
 
 export async function checkStatsIntegrity() {
   return verifySystemIntegrity();
+}
+
+class WalletConstraintRollback extends Error {
+  constructor() {
+    super("wallet-constraint-rollback");
+    this.name = "WalletConstraintRollback";
+  }
+}
+
+function isWalletConstraintViolation(err: unknown) {
+  const error = err as { code?: string; message?: string; meta?: { message?: string } };
+  const message = `${error?.message ?? ""} ${error?.meta?.message ?? ""}`.toLowerCase();
+
+  return (
+    error?.code === "P2004" ||
+    message.includes("check constraint") ||
+    message.includes("violates check constraint") ||
+    message.includes("cashbalance") ||
+    message.includes("cash_balance")
+  );
+}
+
+export async function verifyWalletConstraintIntegrity() {
+  const details: string[] = [];
+  let walletConstraintEnforced = false;
+  let rollbackVerified = false;
+
+  try {
+    await prisma.$transaction(async (tx) => {
+      const suffix = randomUUID().replace(/-/g, "").slice(0, 12).toUpperCase();
+      const testUser = await tx.user.create({
+        data: {
+          platformId: `db-integrity-${suffix}`,
+          referralCode: `DBINT${suffix}`,
+          wallet: {
+            create: {
+              cashBalance: D(0),
+              bonusBalance: D(0),
+            },
+          },
+        },
+        include: { wallet: true },
+      });
+
+      if (!testUser.wallet) {
+        throw new Error("Failed to create test wallet for integrity check");
+      }
+
+      try {
+        await tx.wallet.update({
+          where: { userId: testUser.id },
+          data: { cashBalance: D(-1) },
+        });
+        details.push("Wallet negative balance update unexpectedly succeeded");
+      } catch (err: unknown) {
+        if (!isWalletConstraintViolation(err)) {
+          throw err;
+        }
+
+        walletConstraintEnforced = true;
+        details.push("Wallet negative balance update was rejected by the database");
+      }
+
+      throw new WalletConstraintRollback();
+    });
+  } catch (err: unknown) {
+    if (err instanceof WalletConstraintRollback) {
+      rollbackVerified = true;
+    } else {
+      throw err;
+    }
+  }
+
+  return {
+    valid: walletConstraintEnforced && rollbackVerified,
+    checks: {
+      walletNonNegativeBalanceConstraint: walletConstraintEnforced,
+      rollbackVerified,
+    },
+    details,
+  };
 }

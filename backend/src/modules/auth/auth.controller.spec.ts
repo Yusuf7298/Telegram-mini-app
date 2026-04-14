@@ -36,7 +36,12 @@ describe("telegramLogin", () => {
   it("returns token and user for successful login", async () => {
     const req = {
       body: { initData: "valid-init-data" },
-    } as Request;
+      ip: "127.0.0.1",
+      headers: {
+        "x-device-id": "device-123",
+        "user-agent": "jest-agent",
+      },
+    } as unknown as Request;
     const res = createResponseMock();
 
     const user = {
@@ -52,7 +57,11 @@ describe("telegramLogin", () => {
     await telegramLogin(req, res);
 
     expect(mockVerifyTelegramData).toHaveBeenCalledWith("valid-init-data");
-    expect(mockAuthWithTelegram).toHaveBeenCalledWith("valid-init-data");
+    expect(mockAuthWithTelegram).toHaveBeenCalledWith("valid-init-data", {
+      ip: "127.0.0.1",
+      deviceId: "device-123",
+      userAgent: "jest-agent",
+    });
     expect(mockGenerateToken).toHaveBeenCalledWith("user-1");
     expect(res.json).toHaveBeenCalledWith({
       success: true,
@@ -60,6 +69,7 @@ describe("telegramLogin", () => {
         token: "jwt-token",
         user,
       },
+      error: null,
     });
   });
 
@@ -75,10 +85,13 @@ describe("telegramLogin", () => {
 
     await telegramLogin(req, res);
 
-    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.status).toHaveBeenCalledWith(409);
     expect(res.json).toHaveBeenCalledWith({
       success: false,
-      error: "Invalid Telegram signature",
+      error: {
+        code: "REPLAY_ATTACK",
+        message: "Invalid Telegram signature",
+      },
     });
     expect(mockAuthWithTelegram).not.toHaveBeenCalled();
   });
@@ -95,10 +108,13 @@ describe("telegramLogin", () => {
 
     await telegramLogin(req, res);
 
-    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.status).toHaveBeenCalledWith(409);
     expect(res.json).toHaveBeenCalledWith({
       success: false,
-      error: "Telegram authentication expired",
+      error: {
+        code: "REPLAY_ATTACK",
+        message: "Telegram authentication expired",
+      },
     });
     expect(mockAuthWithTelegram).not.toHaveBeenCalled();
   });

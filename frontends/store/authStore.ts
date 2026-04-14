@@ -1,5 +1,11 @@
 import { create } from 'zustand';
 import { User } from '@/lib/apiService';
+import {
+  clearStoredAuthSession,
+  getStoredToken,
+  getStoredUser,
+  storeAuthSession,
+} from '@/lib/tokenStorage';
 
 interface AuthState {
   user: User | null;
@@ -9,21 +15,15 @@ interface AuthState {
 }
 
 export const useAuthStore = create<AuthState>((set) => ({
-  user: null,
-  token: typeof window !== 'undefined' ? localStorage.getItem('boxplay_token') : null,
+  user: getStoredUser(),
+  token: getStoredToken(),
   login: (user, token) => {
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('boxplay_token', token);
-      localStorage.setItem('boxplay_user', JSON.stringify(user));
-    }
+    storeAuthSession(token, user);
 
     set({ user, token });
   },
   logout: () => {
-    if (typeof window !== 'undefined') {
-      localStorage.removeItem('boxplay_token');
-      localStorage.removeItem('boxplay_user');
-    }
+    clearStoredAuthSession();
 
     set({ user: null, token: null });
   },

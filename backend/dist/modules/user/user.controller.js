@@ -9,6 +9,7 @@ exports.getCurrentUser = getCurrentUser;
 const db_1 = require("../../config/db");
 const crypto_1 = require("crypto");
 const crypto_2 = __importDefault(require("crypto"));
+const responder_1 = require("../../utils/responder");
 function isValidString(value) {
     return typeof value === "string" && value.trim().length > 0;
 }
@@ -16,7 +17,7 @@ async function registerUser(req, res) {
     try {
         const { platformId, username, referrerId } = req.body;
         if (!isValidString(platformId)) {
-            return res.status(400).json({ success: false, error: "platformId is required" });
+            return (0, responder_1.failure)(res, "INVALID_INPUT", "platformId is required");
         }
         const normalizedReferrerId = isValidString(referrerId)
             ? referrerId
@@ -27,14 +28,14 @@ async function registerUser(req, res) {
                 select: { id: true },
             });
             if (!referrer) {
-                return res.status(400).json({ success: false, error: "Invalid referrerId" });
+                return (0, responder_1.failure)(res, "INVALID_INPUT", "Invalid referrerId");
             }
         }
         const existing = await db_1.prisma.user.findUnique({
             where: { platformId },
         });
         if (existing)
-            return res.json({ success: true, data: existing });
+            return (0, responder_1.success)(res, existing);
         const user = await db_1.prisma.user.create({
             data: {
                 platformId,
@@ -56,46 +57,46 @@ async function registerUser(req, res) {
                 },
             },
         });
-        return res.json({ success: true, data: user });
+        return (0, responder_1.success)(res, user);
     }
     catch (err) {
-        return res.status(500).json({ success: false, error: "Failed to create user" });
+        return (0, responder_1.failure)(res, "INTERNAL_ERROR", "Failed to create user");
     }
 }
 async function getReferrals(req, res) {
     try {
         const userId = req.userId;
         if (!userId?.trim()) {
-            return res.status(400).json({ success: false, error: "userId is required" });
+            return (0, responder_1.failure)(res, "INVALID_INPUT", "userId is required");
         }
         const user = await db_1.prisma.user.findUnique({
             where: { id: userId },
             select: { referrals: true },
         });
         if (!user) {
-            return res.status(404).json({ success: false, error: "User not found" });
+            return (0, responder_1.failure)(res, "NOT_FOUND", "User not found");
         }
-        return res.json({ success: true, data: user });
+        return (0, responder_1.success)(res, user);
     }
     catch (err) {
-        return res.status(500).json({ success: false, error: "Failed to fetch referrals" });
+        return (0, responder_1.failure)(res, "INTERNAL_ERROR", "Failed to fetch referrals");
     }
 }
 async function getCurrentUser(req, res) {
     try {
         const userId = req.userId;
         if (!userId?.trim()) {
-            return res.status(400).json({ success: false, error: "userId is required" });
+            return (0, responder_1.failure)(res, "INVALID_INPUT", "userId is required");
         }
         const user = await db_1.prisma.user.findUnique({
             where: { id: userId },
         });
         if (!user) {
-            return res.status(404).json({ success: false, error: "User not found" });
+            return (0, responder_1.failure)(res, "NOT_FOUND", "User not found");
         }
-        return res.json({ success: true, data: user });
+        return (0, responder_1.success)(res, user);
     }
     catch (err) {
-        return res.status(500).json({ success: false, error: "Failed to fetch user" });
+        return (0, responder_1.failure)(res, "INTERNAL_ERROR", "Failed to fetch user");
     }
 }

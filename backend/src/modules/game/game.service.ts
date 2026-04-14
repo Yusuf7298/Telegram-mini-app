@@ -5,6 +5,8 @@ import { generateRewardFromDB } from "../../services/reward.service";
 import { withUserLock } from "../../utils/lock";
 import { logSuspiciousAction } from "../../services/suspiciousActionLog.service";
 import { logAudit } from "../../services/auditLog.service";
+import { logStructuredEvent } from "../../services/logger";
+import { recordBoxOpenAttempt, recordRewardEvent } from "../../services/fraudDetection.service";
 import { createIdempotencyKey, completeIdempotencyKey, checkIdempotencyKey } from "../../services/idempotency.service";
 import { trackBonusUsage } from "../../services/bonus.service";
 import { logReferral, checkReferralLimits } from "../../services/referral.service";
@@ -20,16 +22,27 @@ const RAPID_ONBOARDING_WINDOW_MS = 10 * 1000;
 const MIN_PLAY_INTERVAL_MS = 300;
 const RESTRICTED_RISK_THRESHOLD = 70;
 
-function randomInt(min: number, max: number): number {
-  return crypto.randomInt(min, max);
+function ensureUserNotFrozen(user: { isFrozen?: boolean }) {
+  if (user.isFrozen) {
+    throw new Error("Account is frozen");
+  }
 }
 
-function assertFirstPlayRewardRange(isFirstPlay: boolean, reward: Prisma.Decimal): void {
-  if (!isFirstPlay) return;
+function assertFirstPlayRewardRange(reward: Prisma.Decimal): void {
   const value = reward.toNumber();
   if (value < FIRST_PLAY_REWARD_MIN || value > FIRST_PLAY_REWARD_MAX - 1) {
     throw new Error("CRITICAL: First play reward violation");
   }
+}
+
+function logFirstPlayReward(userId: string, action: "openBox" | "openFreeBox", reward: Prisma.Decimal): void {
+  console.info("[FirstPlayReward]", {
+    userId,
+    action,
+    reward: reward.toString(),
+    min: FIRST_PLAY_REWARD_MIN,
+    max: FIRST_PLAY_REWARD_MAX - 1,
+  });
 }
 
 function applyOnboardingRtpControl(
@@ -139,6 +152,42 @@ export async function openBox(
 ) {
   return withUserLock(userId, async () => {
     return withTransactionRetry(prisma, async (tx) => {
+      await logStructuredEvent("financial_operation", {
+        userId,
+        action: "open_box_attempt",
+        reward: null,
+        idempotencyKey,
+        timestamp: new Date().toISOString(),
+      });
+
+      const existing = await checkIdempotencyKey({ id: idempotencyKey, userId, tx });
+      if (existing?.status === "COMPLETED") {
+        await logStructuredEvent("financial_operation", {
+          userId,
+          action: "idempotency_replay",
+          reward: (existing.response as Record<string, any> | null)?.data?.reward ?? null,
+          idempotencyKey,
+          timestamp: new Date().toISOString(),
+        });
+        return existing.response;
+      }
+      if (existing?.status === "PENDING") {
+        throw new Error("Idempotent request is still processing");
+      }
+
+      try {
+        await createIdempotencyKey({ id: idempotencyKey, userId, action: "openBox", tx });
+      } catch (err) {
+        const duplicate = await checkIdempotencyKey({ id: idempotencyKey, userId, tx });
+        if (duplicate?.status === "COMPLETED") {
+          return duplicate.response;
+        }
+        if (duplicate?.status === "PENDING") {
+          throw new Error("Idempotent request is still processing");
+        }
+        throw err;
+      }
+
       const user = await tx.user.findUnique({
         where: { id: userId },
         select: {
@@ -154,24 +203,14 @@ export async function openBox(
       });
 
       if (!user) throw new Error("User not found");
-      if (user.isFrozen || user.accountStatus !== "ACTIVE" || user.riskScore > RESTRICTED_RISK_THRESHOLD) {
+      ensureUserNotFrozen(user);
+      if (user.accountStatus !== "ACTIVE" || user.riskScore > RESTRICTED_RISK_THRESHOLD) {
         throw new Error("Account restricted");
       }
 
       await enforceGameplayPacing(tx, { id: user.id, lastPlayTimestamp: user.lastPlayTimestamp }, "openBox");
 
       const isOnboarding = user.totalPlaysCount < WAITLIST_UNLOCK_PLAYS;
-
-      let idempKey;
-      try {
-        idempKey = await createIdempotencyKey({ id: idempotencyKey, userId, action: "openBox", tx });
-      } catch (err: any) {
-        idempKey = await checkIdempotencyKey({ id: idempotencyKey, userId, tx });
-        if (idempKey && idempKey.status === "COMPLETED") {
-          return (idempKey.response as Prisma.Decimal | null) ?? idempKey.rewardAmount;
-        }
-        throw err;
-      }
 
       await tx.boxOpenLog.create({
         data: { userId, ip: ip || "", deviceId, action: "openBox" },
@@ -205,6 +244,14 @@ export async function openBox(
       const nextCashBalance = wallet.cashBalance.minus(cashUsed);
       const nextBonusBalance = wallet.bonusBalance.minus(bonusUsed);
 
+      await logStructuredEvent("financial_operation", {
+        userId,
+        action: "box_purchase_mutation_before",
+        amount: box.price.toString(),
+        idempotencyKey,
+        timestamp: new Date().toISOString(),
+      });
+
       const deductResult = await tx.wallet.updateMany({
         where: {
           userId,
@@ -215,6 +262,14 @@ export async function openBox(
           cashBalance: nextCashBalance,
           bonusBalance: nextBonusBalance,
         },
+      });
+
+      await logStructuredEvent("financial_operation", {
+        userId,
+        action: "box_purchase_mutation_after",
+        amount: box.price.toString(),
+        idempotencyKey,
+        timestamp: new Date().toISOString(),
       });
 
       if (deductResult.count === 0) {
@@ -240,7 +295,9 @@ export async function openBox(
       let reward: Prisma.Decimal;
 
       if (isFirstPlay) {
-        reward = new Prisma.Decimal(randomInt(FIRST_PLAY_REWARD_MIN, FIRST_PLAY_REWARD_MAX));
+        reward = new Prisma.Decimal(crypto.randomInt(150, 251));
+        assertFirstPlayRewardRange(reward);
+        logFirstPlayReward(userId, "openBox", reward);
       } else {
         const rewardObj = await generateRewardFromDB(boxId, tx);
         reward = rewardObj.amount;
@@ -254,11 +311,46 @@ export async function openBox(
         }
       }
 
-      assertFirstPlayRewardRange(isFirstPlay, reward);
+      await logStructuredEvent("financial_operation", {
+        userId,
+        action: "box_reward_mutation_before",
+        reward: reward.toString(),
+        idempotencyKey,
+        timestamp: new Date().toISOString(),
+      });
+
+      const openBoxSuspicion = recordBoxOpenAttempt(userId);
+      if (openBoxSuspicion.isSuspicious) {
+        await logStructuredEvent("fraud_detected", {
+          userId,
+          reason: openBoxSuspicion.reason,
+          type: "open_box_rate",
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      const rewardSuspicion = recordRewardEvent(userId, reward);
+      if (rewardSuspicion.isSuspicious) {
+        await logStructuredEvent("fraud_detected", {
+          userId,
+          reason: rewardSuspicion.reason,
+          type: "reward_spike",
+          amount: reward.toString(),
+          timestamp: new Date().toISOString(),
+        });
+      }
 
       await tx.wallet.update({
         where: { userId },
         data: { cashBalance: { increment: reward } },
+      });
+
+      await logStructuredEvent("financial_operation", {
+        userId,
+        action: "box_reward_mutation_after",
+        reward: reward.toString(),
+        idempotencyKey,
+        timestamp: new Date().toISOString(),
       });
 
       if (bonusUsed.gt(0)) {
@@ -337,11 +429,45 @@ export async function openBox(
         }
       }
 
-      await completeIdempotencyKey({ id: idempotencyKey, userId, response: reward, tx });
+      const completedResponse = await completeIdempotencyKey({
+        id: idempotencyKey,
+        userId,
+        response: {
+          reward: reward.toString(),
+        },
+        metadata: {
+          boxId,
+          action: "openBox",
+          walletSnapshot: {
+            cashBalance: walletAfterReward.cashBalance,
+            bonusBalance: walletAfterReward.bonusBalance,
+          },
+        },
+        tx,
+      });
       await logAudit({ userId, action: "box_open", details: { boxId, reward: reward.toString() }, tx });
 
-      return reward;
+      await logStructuredEvent("financial_operation", {
+        userId,
+        action: "box_opened",
+        amount: box.price.toString(),
+        reward: reward.toString(),
+        idempotencyKey,
+        timestamp: new Date().toISOString(),
+      });
+
+      return completedResponse;
     });
+  }).catch(async (err) => {
+    await logStructuredEvent("financial_operation", {
+      userId,
+      action: "box_open_failed",
+      reward: null,
+      idempotencyKey,
+      timestamp: new Date().toISOString(),
+      message: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
   });
 }
 
@@ -353,6 +479,42 @@ export async function openFreeBox(
 ) {
   return withUserLock(userId, async () => {
     return withTransactionRetry(prisma, async (tx) => {
+      await logStructuredEvent("financial_operation", {
+        userId,
+        action: "open_free_box_attempt",
+        reward: null,
+        idempotencyKey,
+        timestamp: new Date().toISOString(),
+      });
+
+      const existing = await checkIdempotencyKey({ id: idempotencyKey, userId, tx });
+      if (existing?.status === "COMPLETED") {
+        await logStructuredEvent("financial_operation", {
+          userId,
+          action: "idempotency_replay",
+          reward: (existing.response as Record<string, any> | null)?.data?.reward ?? null,
+          idempotencyKey,
+          timestamp: new Date().toISOString(),
+        });
+        return existing.response;
+      }
+      if (existing?.status === "PENDING") {
+        throw new Error("Idempotent request is still processing");
+      }
+
+      try {
+        await createIdempotencyKey({ id: idempotencyKey, userId, action: "openFreeBox", tx });
+      } catch (err) {
+        const duplicate = await checkIdempotencyKey({ id: idempotencyKey, userId, tx });
+        if (duplicate?.status === "COMPLETED") {
+          return duplicate.response;
+        }
+        if (duplicate?.status === "PENDING") {
+          throw new Error("Idempotent request is still processing");
+        }
+        throw err;
+      }
+
       const user = await tx.user.findUnique({
         where: { id: userId },
         select: {
@@ -368,22 +530,12 @@ export async function openFreeBox(
         },
       });
       if (!user) throw new Error("User not found");
-      if (user.isFrozen || user.accountStatus !== "ACTIVE" || user.riskScore > RESTRICTED_RISK_THRESHOLD) {
+      ensureUserNotFrozen(user);
+      if (user.accountStatus !== "ACTIVE" || user.riskScore > RESTRICTED_RISK_THRESHOLD) {
         throw new Error("Account restricted");
       }
 
       await enforceGameplayPacing(tx, { id: user.id, lastPlayTimestamp: user.lastPlayTimestamp }, "openFreeBox");
-
-      let idempKey;
-      try {
-        idempKey = await createIdempotencyKey({ id: idempotencyKey, userId, action: "openFreeBox", tx });
-      } catch (err: any) {
-        idempKey = await checkIdempotencyKey({ id: idempotencyKey, userId, tx });
-        if (idempKey && idempKey.status === "COMPLETED") {
-          return (idempKey.response as Record<string, unknown> | null) ?? idempKey.rewardAmount;
-        }
-        throw err;
-      }
 
       const markUsed = await tx.user.updateMany({
         where: { id: userId, freeBoxUsed: false },
@@ -402,14 +554,53 @@ export async function openFreeBox(
       if (!wallet) throw new Error("Wallet not found");
 
       const isFirstPlay = user.totalPlaysCount === 0;
-      const firstPlayReward = new Prisma.Decimal(randomInt(FIRST_PLAY_REWARD_MIN, FIRST_PLAY_REWARD_MAX));
-      const reward = isFirstPlay ? firstPlayReward : new Prisma.Decimal(0);
+      let reward = new Prisma.Decimal(0);
+      if (isFirstPlay) {
+        reward = new Prisma.Decimal(crypto.randomInt(150, 251));
+        assertFirstPlayRewardRange(reward);
+        logFirstPlayReward(userId, "openFreeBox", reward);
+      }
 
-      assertFirstPlayRewardRange(isFirstPlay, reward);
+      const openBoxSuspicion = recordBoxOpenAttempt(userId);
+      if (openBoxSuspicion.isSuspicious) {
+        await logStructuredEvent("fraud_detected", {
+          userId,
+          reason: openBoxSuspicion.reason,
+          type: "open_box_rate",
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      const rewardSuspicion = recordRewardEvent(userId, reward);
+      if (rewardSuspicion.isSuspicious) {
+        await logStructuredEvent("fraud_detected", {
+          userId,
+          reason: rewardSuspicion.reason,
+          type: "reward_spike",
+          amount: reward.toString(),
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      await logStructuredEvent("financial_operation", {
+        userId,
+        action: "free_box_reward_mutation_before",
+        reward: reward.toString(),
+        idempotencyKey,
+        timestamp: new Date().toISOString(),
+      });
 
       const walletAfterReward = await tx.wallet.update({
         where: { userId },
         data: { cashBalance: { increment: reward } },
+      });
+
+      await logStructuredEvent("financial_operation", {
+        userId,
+        action: "free_box_reward_mutation_after",
+        reward: reward.toString(),
+        idempotencyKey,
+        timestamp: new Date().toISOString(),
       });
 
       await tx.transaction.create({
@@ -440,16 +631,54 @@ export async function openFreeBox(
         await detectRapidOnboardingCompletion(tx, userId);
       }
 
-      await completeIdempotencyKey({ id: idempotencyKey, userId, response: reward, tx });
+      const completedResponse = await completeIdempotencyKey({
+        id: idempotencyKey,
+        userId,
+        response: {
+          reward: reward.toString(),
+          totalPlaysCount: progress.totalPlaysCount,
+          waitlistBonusUnlocked: progress.waitlistBonusUnlocked || progress.totalPlaysCount >= WAITLIST_UNLOCK_PLAYS,
+          waitlistBonusAmount: WAITLIST_BONUS_AMOUNT.toString(),
+          playsRequiredToUnlock: WAITLIST_UNLOCK_PLAYS,
+          walletSnapshot: {
+            cashBalance: walletAfterReward.cashBalance,
+            bonusBalance: walletAfterReward.bonusBalance,
+          },
+        },
+        metadata: {
+          action: "openFreeBox",
+          totalPlaysCount: progress.totalPlaysCount,
+          waitlistBonusUnlocked: progress.waitlistBonusUnlocked || progress.totalPlaysCount >= WAITLIST_UNLOCK_PLAYS,
+          waitlistBonusAmount: WAITLIST_BONUS_AMOUNT,
+          playsRequiredToUnlock: WAITLIST_UNLOCK_PLAYS,
+          walletSnapshot: {
+            cashBalance: walletAfterReward.cashBalance,
+            bonusBalance: walletAfterReward.bonusBalance,
+          },
+        },
+        tx,
+      });
 
-      return {
-        reward,
-        totalPlaysCount: progress.totalPlaysCount,
-        waitlistBonusUnlocked: progress.waitlistBonusUnlocked || progress.totalPlaysCount >= WAITLIST_UNLOCK_PLAYS,
-        waitlistBonusAmount: WAITLIST_BONUS_AMOUNT,
-        playsRequiredToUnlock: WAITLIST_UNLOCK_PLAYS,
-      };
+      await logStructuredEvent("financial_operation", {
+        userId,
+        action: "box_opened",
+        reward: reward.toString(),
+        idempotencyKey,
+        timestamp: new Date().toISOString(),
+      });
+
+      return completedResponse;
     });
+  }).catch(async (err) => {
+    await logStructuredEvent("financial_operation", {
+      userId,
+      action: "box_open_failed",
+      reward: null,
+      idempotencyKey,
+      timestamp: new Date().toISOString(),
+      message: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
   });
 }
 
