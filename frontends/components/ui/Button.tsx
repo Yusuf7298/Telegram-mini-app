@@ -4,7 +4,12 @@ import { forwardRef } from 'react';
 
 export type ButtonVariant = 'primary' | 'secondary' | 'outline';
 
-interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
+type NativeButtonProps = Omit<
+  React.ButtonHTMLAttributes<HTMLButtonElement>,
+  'onDrag' | 'onDragStart' | 'onDragEnd' | 'onDragCapture' | 'onDragStartCapture' | 'onDragEndCapture'
+>;
+
+interface ButtonProps extends NativeButtonProps {
   variant?: ButtonVariant;
   children: React.ReactNode;
 }
