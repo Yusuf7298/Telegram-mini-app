@@ -6,7 +6,18 @@ export type ButtonVariant = 'primary' | 'secondary' | 'outline';
 
 type NativeButtonProps = Omit<
   React.ButtonHTMLAttributes<HTMLButtonElement>,
-  'onDrag' | 'onDragStart' | 'onDragEnd' | 'onDragCapture' | 'onDragStartCapture' | 'onDragEndCapture'
+  | 'onDrag'
+  | 'onDragStart'
+  | 'onDragEnd'
+  | 'onDragCapture'
+  | 'onDragStartCapture'
+  | 'onDragEndCapture'
+  | 'onAnimationStart'
+  | 'onAnimationEnd'
+  | 'onAnimationIteration'
+  | 'onAnimationStartCapture'
+  | 'onAnimationEndCapture'
+  | 'onAnimationIterationCapture'
 >;
 
 interface ButtonProps extends NativeButtonProps {
