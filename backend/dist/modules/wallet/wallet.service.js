@@ -15,6 +15,7 @@ const idempotency_service_1 = require("../../services/idempotency.service");
 const suspiciousActionLog_service_1 = require("../../services/suspiciousActionLog.service");
 const logger_1 = require("../../services/logger");
 const fraudDetection_service_1 = require("../../services/fraudDetection.service");
+const auditLog_service_1 = require("../../services/auditLog.service");
 const WITHDRAW_BLOCK_RISK_THRESHOLD = 70;
 const WITHDRAW_MIN_PLAYS = 5;
 const WITHDRAW_REWARD_COOLDOWN_MS = 60 * 1000;
@@ -289,17 +290,41 @@ async function withdrawWallet(userId, amountInput, idempotencyKey) {
                     },
                 },
             });
+            await (0, auditLog_service_1.logAudit)({
+                userId,
+                action: "wallet_withdraw",
+                details: {
+                    amount: amount.toString(),
+                    cashUsed: cashUsed.toString(),
+                    bonusUsed: bonusUsed.toString(),
+                    idempotencyKey,
+                },
+                tx,
+            });
             const walletAfter = await tx.wallet.findUnique({ where: { userId } });
             if (!walletAfter)
                 throw new Error("Wallet not found");
             const completedResponse = await (0, idempotency_service_1.completeIdempotencyKey)({
                 id: idempotencyKey,
                 userId,
-                response: walletAfter,
+                response: {
+                    walletSnapshot: {
+                        cashBalance: walletAfter.cashBalance,
+                        bonusBalance: walletAfter.bonusBalance,
+                        airtimeBalance: 0,
+                    },
+                    cashBalance: walletAfter.cashBalance,
+                    bonusBalance: walletAfter.bonusBalance,
+                    airtimeBalance: 0,
+                },
                 metadata: {
                     action: "walletWithdraw",
                     amount: amount.toString(),
-                    walletSnapshot: walletAfter,
+                    walletSnapshot: {
+                        cashBalance: walletAfter.cashBalance,
+                        bonusBalance: walletAfter.bonusBalance,
+                        airtimeBalance: 0,
+                    },
                 },
                 tx,
             });

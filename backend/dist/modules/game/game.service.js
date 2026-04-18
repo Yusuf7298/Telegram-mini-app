@@ -20,11 +20,8 @@ const bonus_service_1 = require("../../services/bonus.service");
 const referral_service_1 = require("../../services/referral.service");
 const crypto_1 = __importDefault(require("crypto"));
 const rtp_service_1 = require("../../services/rtp.service");
-const WAITLIST_BONUS_AMOUNT = new client_1.Prisma.Decimal(1000);
+const gameConfig_service_1 = require("../../services/gameConfig.service");
 const WAITLIST_UNLOCK_PLAYS = 5;
-const REFERRAL_REWARD_AMOUNT = new client_1.Prisma.Decimal(200);
-const FIRST_PLAY_REWARD_MIN = 150;
-const FIRST_PLAY_REWARD_MAX = 251;
 const RAPID_ONBOARDING_WINDOW_MS = 10 * 1000;
 const MIN_PLAY_INTERVAL_MS = 300;
 const RESTRICTED_RISK_THRESHOLD = 70;
@@ -33,19 +30,19 @@ function ensureUserNotFrozen(user) {
         throw new Error("Account is frozen");
     }
 }
-function assertFirstPlayRewardRange(reward) {
+function assertFirstPlayRewardRange(reward, config) {
     const value = reward.toNumber();
-    if (value < FIRST_PLAY_REWARD_MIN || value > FIRST_PLAY_REWARD_MAX - 1) {
+    if (value < config.minBoxReward || value > config.maxBoxReward - 1) {
         throw new Error("CRITICAL: First play reward violation");
     }
 }
-function logFirstPlayReward(userId, action, reward) {
+function logFirstPlayReward(userId, action, reward, config) {
     console.info("[FirstPlayReward]", {
         userId,
         action,
         reward: reward.toString(),
-        min: FIRST_PLAY_REWARD_MIN,
-        max: FIRST_PLAY_REWARD_MAX - 1,
+        min: config.minBoxReward,
+        max: config.maxBoxReward - 1,
     });
 }
 function applyOnboardingRtpControl(reward, boxPrice, onboardingRtpModifier) {
@@ -128,6 +125,17 @@ async function enforceGameplayPacing(tx, user, action) {
         });
     }
 }
+async function getGameConfig(tx) {
+    const config = await (0, gameConfig_service_1.getValidatedGameConfig)({ client: tx, bypassCache: true });
+    return {
+        rtpModifier: config.rtpModifier,
+        referralRewardAmount: config.referralRewardAmount,
+        freeBoxRewardAmount: config.freeBoxRewardAmount,
+        minBoxReward: config.minBoxReward,
+        maxBoxReward: config.maxBoxReward,
+        waitlistBonus: config.waitlistBonus,
+    };
+}
 async function openBox(userId, boxId, idempotencyKey, ip, deviceId) {
     return (0, lock_1.withUserLock)(userId, async () => {
         return (0, withTransactionRetry_1.withTransactionRetry)(db_1.prisma, async (tx) => {
@@ -169,7 +177,6 @@ async function openBox(userId, boxId, idempotencyKey, ip, deviceId) {
                 where: { id: userId },
                 select: {
                     id: true,
-                    platformId: true,
                     isFrozen: true,
                     accountStatus: true,
                     riskScore: true,
@@ -257,19 +264,19 @@ async function openBox(userId, boxId, idempotencyKey, ip, deviceId) {
                     meta: { cashUsed: cashUsed.toString(), bonusUsed: bonusUsed.toString(), bonusLocked: wallet.bonusLocked },
                 },
             });
+            const config = await getGameConfig(tx);
             const isFirstPlay = user.totalPlaysCount === 0;
             let reward;
             if (isFirstPlay) {
-                reward = new client_1.Prisma.Decimal(crypto_1.default.randomInt(150, 251));
-                assertFirstPlayRewardRange(reward);
-                logFirstPlayReward(userId, "openBox", reward);
+                reward = new client_1.Prisma.Decimal(crypto_1.default.randomInt(config.minBoxReward, config.maxBoxReward));
+                assertFirstPlayRewardRange(reward, config);
+                logFirstPlayReward(userId, "openBox", reward, config);
             }
             else {
                 const rewardObj = await (0, reward_service_1.generateRewardFromDB)(boxId, tx);
                 reward = rewardObj.amount;
                 if (isOnboarding) {
-                    const config = await tx.gameConfig.findUnique({ where: { id: "global" } });
-                    const onboardingFactor = Math.max(1, Math.min(config?.rtpModifier ?? 1.1, 1.2));
+                    const onboardingFactor = Math.max(1, Math.min(config.rtpModifier, 1.2));
                     reward = applyOnboardingRtpControl(reward, box.price, onboardingFactor);
                 }
                 else {
@@ -357,14 +364,14 @@ async function openBox(userId, boxId, idempotencyKey, ip, deviceId) {
                 select: { totalPlaysCount: true, referredById: true },
             });
             await unlockWaitlistBonusIfEligible(tx, userId);
-            await processReferralRewardIfEligible(tx, userId, playState.totalPlaysCount, playState.referredById);
+            const referralActivation = await processReferralRewardIfEligible(tx, userId);
             if (playState.totalPlaysCount >= WAITLIST_UNLOCK_PLAYS) {
                 await detectRapidOnboardingCompletion(tx, userId);
             }
             // Referral anti-abuse and delayed reward.
             if (user.totalPlaysCount === 0 && playState.referredById) {
                 const referrer = await tx.user.findUnique({ where: { id: playState.referredById } });
-                if (referrer && referrer.platformId === user.platformId) {
+                if (referrer && referrer.id === user.id) {
                     await (0, referral_service_1.logReferral)({ referrerId: playState.referredById, referredId: userId, ip: ip || "", deviceId, suspicious: true, tx });
                     await (0, suspiciousActionLog_service_1.logSuspiciousAction)({ userId, type: "referral_fraud", metadata: { referrerId: playState.referredById }, tx });
                 }
@@ -387,13 +394,21 @@ async function openBox(userId, boxId, idempotencyKey, ip, deviceId) {
                 userId,
                 response: {
                     reward: reward.toString(),
+                    ...(referralActivation ? { referralActivation } : {}),
+                    walletSnapshot: {
+                        cashBalance: walletAfterReward.cashBalance,
+                        bonusBalance: walletAfterReward.bonusBalance,
+                        airtimeBalance: 0,
+                    },
                 },
                 metadata: {
                     boxId,
                     action: "openBox",
+                    ...(referralActivation ? { referralActivation } : {}),
                     walletSnapshot: {
                         cashBalance: walletAfterReward.cashBalance,
                         bonusBalance: walletAfterReward.bonusBalance,
+                        airtimeBalance: 0,
                     },
                 },
                 tx,
@@ -492,13 +507,8 @@ async function openFreeBox(userId, idempotencyKey, ip, deviceId) {
             const wallet = await tx.wallet.findUnique({ where: { userId } });
             if (!wallet)
                 throw new Error("Wallet not found");
-            const isFirstPlay = user.totalPlaysCount === 0;
-            let reward = new client_1.Prisma.Decimal(0);
-            if (isFirstPlay) {
-                reward = new client_1.Prisma.Decimal(crypto_1.default.randomInt(150, 251));
-                assertFirstPlayRewardRange(reward);
-                logFirstPlayReward(userId, "openFreeBox", reward);
-            }
+            const config = await getGameConfig(tx);
+            const reward = config.freeBoxRewardAmount;
             const openBoxSuspicion = (0, fraudDetection_service_1.recordBoxOpenAttempt)(userId);
             if (openBoxSuspicion.isSuspicious) {
                 await (0, logger_1.logStructuredEvent)("fraud_detected", {
@@ -544,9 +554,9 @@ async function openFreeBox(userId, idempotencyKey, ip, deviceId) {
                     balanceBefore: wallet.cashBalance.plus(wallet.bonusBalance),
                     balanceAfter: walletAfterReward.cashBalance.plus(walletAfterReward.bonusBalance),
                     meta: {
-                        firstPlayOverride: isFirstPlay,
+                        source: "game_config",
+                        configuredFreeBoxRewardAmount: reward.toString(),
                         reward: reward.toString(),
-                        rewardRange: `${FIRST_PLAY_REWARD_MIN}-${FIRST_PLAY_REWARD_MAX - 1}`,
                     },
                 },
             });
@@ -555,8 +565,17 @@ async function openFreeBox(userId, idempotencyKey, ip, deviceId) {
                 data: { totalPlaysCount: { increment: 1 }, lastPlayTimestamp: new Date() },
                 select: { totalPlaysCount: true, waitlistBonusUnlocked: true },
             });
+            await (0, auditLog_service_1.logAudit)({
+                userId,
+                action: "free_box_reward",
+                details: {
+                    reward: reward.toString(),
+                    idempotencyKey,
+                    source: "game_config",
+                },
+                tx,
+            });
             await unlockWaitlistBonusIfEligible(tx, userId);
-            await processReferralRewardIfEligible(tx, userId, progress.totalPlaysCount, user.referredById);
             if (progress.totalPlaysCount >= WAITLIST_UNLOCK_PLAYS) {
                 await detectRapidOnboardingCompletion(tx, userId);
             }
@@ -567,7 +586,7 @@ async function openFreeBox(userId, idempotencyKey, ip, deviceId) {
                     reward: reward.toString(),
                     totalPlaysCount: progress.totalPlaysCount,
                     waitlistBonusUnlocked: progress.waitlistBonusUnlocked || progress.totalPlaysCount >= WAITLIST_UNLOCK_PLAYS,
-                    waitlistBonusAmount: WAITLIST_BONUS_AMOUNT.toString(),
+                    waitlistBonusAmount: config.waitlistBonus.toString(),
                     playsRequiredToUnlock: WAITLIST_UNLOCK_PLAYS,
                     walletSnapshot: {
                         cashBalance: walletAfterReward.cashBalance,
@@ -578,7 +597,7 @@ async function openFreeBox(userId, idempotencyKey, ip, deviceId) {
                     action: "openFreeBox",
                     totalPlaysCount: progress.totalPlaysCount,
                     waitlistBonusUnlocked: progress.waitlistBonusUnlocked || progress.totalPlaysCount >= WAITLIST_UNLOCK_PLAYS,
-                    waitlistBonusAmount: WAITLIST_BONUS_AMOUNT,
+                    waitlistBonusAmount: config.waitlistBonus,
                     playsRequiredToUnlock: WAITLIST_UNLOCK_PLAYS,
                     walletSnapshot: {
                         cashBalance: walletAfterReward.cashBalance,
@@ -623,57 +642,79 @@ async function getBoxes() {
         price: box.price,
     }));
 }
-async function processReferralRewardIfEligible(tx, userId, playCount, referredById) {
-    if (!referredById || playCount < WAITLIST_UNLOCK_PLAYS)
-        return;
-    const referredUser = await tx.user.findUnique({
+async function processReferralRewardIfEligible(tx, userId) {
+    const referralRecord = await tx.user.findUnique({
         where: { id: userId },
         select: {
-            referralRewardPending: true,
-            createdIp: true,
-            deviceHash: true,
+            referredById: true,
+            referralStatus: true,
         },
     });
-    if (!referredUser || !referredUser.referralRewardPending)
-        return;
+    if (!referralRecord?.referredById || referralRecord.referralStatus !== "JOINED")
+        return null;
+    const referredById = referralRecord.referredById;
     const referrer = await tx.user.findUnique({
         where: { id: referredById },
         select: {
             id: true,
-            createdIp: true,
-            deviceHash: true,
-            accountStatus: true,
             wallet: {
                 select: { cashBalance: true, bonusBalance: true },
             },
         },
     });
-    if (!referrer || !referrer.wallet || referrer.accountStatus !== "ACTIVE") {
-        await tx.user.update({
-            where: { id: userId },
-            data: { referralRewardPending: false, referralActivityMet: true },
-        });
-        return;
+    if (!referrer || !referrer.wallet) {
+        return null;
     }
-    const sameIp = referrer.createdIp === referredUser.createdIp;
-    const sameDevice = !!referrer.deviceHash && !!referredUser.deviceHash && referrer.deviceHash === referredUser.deviceHash;
-    if (sameIp || sameDevice) {
-        await (0, suspiciousActionLog_service_1.logSuspiciousAction)({
-            userId,
-            type: "referral_fraud",
-            metadata: { reason: "same_ip_or_device", referrerId: referredById },
-            tx,
+    const activateResult = await tx.user.updateMany({
+        where: { id: userId, referralStatus: "JOINED" },
+        data: {
+            referralStatus: "ACTIVE",
+            referralActivatedAt: new Date(),
+        },
+    });
+    if (activateResult.count === 0) {
+        return null;
+    }
+    await (0, auditLog_service_1.logAudit)({
+        userId,
+        action: "referral_reward_triggered_from_game",
+        details: {
+            referredById,
+            sourceAction: "open_box_success",
+            referralStatusTransition: "JOINED_TO_ACTIVE",
+        },
+        tx,
+    });
+    await (0, logger_1.logStructuredEvent)("referral_activated", {
+        userId,
+        endpoint: "game/open-box",
+        action: "referral_activated",
+        referrerId: referredById,
+        referralStatus: "ACTIVE",
+    });
+    const config = await getGameConfig(tx);
+    const referralRewardAmount = config.referralRewardAmount;
+    try {
+        await tx.referralRewardGrant.create({
+            data: {
+                referrerId: referredById,
+                referredUserId: userId,
+                amount: referralRewardAmount,
+                sourceAction: "open_box_success",
+            },
         });
-        await tx.user.update({
-            where: { id: userId },
-            data: { referralRewardPending: false, referralActivityMet: true },
-        });
-        return;
+    }
+    catch (error) {
+        if (error instanceof client_1.Prisma.PrismaClientKnownRequestError &&
+            error.code === "P2002") {
+            return null;
+        }
+        throw error;
     }
     const before = referrer.wallet.cashBalance.plus(referrer.wallet.bonusBalance);
     await tx.wallet.update({
         where: { userId: referredById },
-        data: { cashBalance: { increment: REFERRAL_REWARD_AMOUNT } },
+        data: { cashBalance: { increment: referralRewardAmount } },
     });
     const referrerWalletAfter = await tx.wallet.findUnique({ where: { userId: referredById } });
     if (!referrerWalletAfter) {
@@ -683,18 +724,32 @@ async function processReferralRewardIfEligible(tx, userId, playCount, referredBy
         data: {
             userId: referredById,
             type: "REFERRAL",
-            amount: REFERRAL_REWARD_AMOUNT,
+            amount: referralRewardAmount,
             balanceBefore: before,
             balanceAfter: referrerWalletAfter.cashBalance.plus(referrerWalletAfter.bonusBalance),
-            meta: { referredUserId: userId, milestone: WAITLIST_UNLOCK_PLAYS },
+            meta: { referredUserId: userId, milestone: "open_box_first_success" },
         },
     });
-    await tx.user.update({
-        where: { id: referredById },
-        data: { referralCount: { increment: 1 } },
+    await (0, auditLog_service_1.logAudit)({
+        userId: referredById,
+        action: "referral_reward",
+        details: {
+            rewardAmount: referralRewardAmount.toString(),
+            referredUserId: userId,
+            milestone: "open_box_first_success",
+        },
+        tx,
     });
-    await tx.user.update({
-        where: { id: userId },
-        data: { referralRewardPending: false, referralActivityMet: true },
+    await (0, logger_1.logStructuredEvent)("referral_reward_granted", {
+        userId: referredById,
+        endpoint: "game/open-box",
+        action: "referral_reward_granted",
+        referredUserId: userId,
+        rewardAmount: referralRewardAmount.toString(),
     });
+    return {
+        referredUserId: userId,
+        referrerId: referredById,
+        rewardAmount: referralRewardAmount.toString(),
+    };
 }

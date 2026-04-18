@@ -52,7 +52,7 @@ export function requireAdmin(req: Request, res: Response, next: NextFunction) {
   }
   try {
     const payload = jwt.verify(token, secret) as { userId?: string; role?: string };
-    if (payload.role !== 'admin') {
+    if (payload.role !== 'ADMIN' && payload.role !== 'SUPER_ADMIN') {
       return res.status(getErrorStatus('FORBIDDEN')).json(structuredError('FORBIDDEN', 'Forbidden: Admins only'));
     }
     (req as any).user = payload;

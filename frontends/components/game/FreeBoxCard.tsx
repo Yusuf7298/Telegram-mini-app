@@ -12,12 +12,11 @@ interface FreeBoxCardProps {
 import { useEffect, useState } from "react";
 
 export default function FreeBoxCard({ targetTime, onOpen, loading }: FreeBoxCardProps) {
-  const cooldown = 30; // seconds (example)
   const [target, setTarget] = useState<number>(0);
 
   useEffect(() => {
-    setTarget(Date.now() + cooldown * 1000);
-  }, []);
+    setTarget(targetTime ?? Date.now());
+  }, [targetTime]);
 
   const { minutes, seconds, isFinished } = useCountdown(target);
 
@@ -28,15 +27,15 @@ export default function FreeBoxCard({ targetTime, onOpen, loading }: FreeBoxCard
         {`${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`}
       </div>
       <div>
-        <p className="text-white text-[18px] font-bold mt-2 mb-1">OPEN YOUR FREE BOX Yusuf</p>
-        <p className="text-[#B6F1E1] text-[14px] mb-3">Guaranteed airtime or cash prize!</p>
+        <p className="text-white text-[18px] font-bold mt-2 mb-1">OPEN YOUR FREE BOX</p>
+        <p className="text-[#B6F1E1] text-[14px] mb-3">Tap to reveal your live reward.</p>
       </div>
       <button
         className="border border-white rounded-lg px-8 py-2 text-white font-bold hover:bg-white hover:text-[#0B2B3C] transition disabled:opacity-60"
         onClick={onOpen}
         disabled={loading || !isFinished}
       >
-        {loading ? 'Opening...' : isFinished ? 'OPEN NOW' : 'Wait...'}
+        {loading ? 'Opening...' : isFinished ? 'OPEN FREE BOX' : 'COOLDOWN ACTIVE'}
       </button>
     </div>
   );

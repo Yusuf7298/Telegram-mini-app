@@ -8,5 +8,6 @@ const referral_validator_1 = require("../../validators/referral.validator");
 const rateLimitRedis_1 = require("../../middleware/rateLimitRedis");
 const router = (0, express_1.Router)();
 router.get("/code", telegramAuth_middleware_1.verifyTelegramAuth, referral_controller_1.getReferralCode);
+router.get("/list", telegramAuth_middleware_1.verifyTelegramAuth, referral_controller_1.getReferralList);
 router.post("/use", telegramAuth_middleware_1.verifyTelegramAuth, rateLimitRedis_1.rateLimitRedisMiddleware, (0, validate_1.validateBody)(referral_validator_1.referralCodeSchema), referral_controller_1.useReferralCode);
 exports.default = router;

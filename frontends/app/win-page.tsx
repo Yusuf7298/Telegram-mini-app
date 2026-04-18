@@ -2,10 +2,11 @@
 import { useState } from "react";
 import Image from "next/image";
 
-export default function WinPage({ prize = "₦1,000", time = "12:23", onUnlock }: { prize?: string; time?: string; onUnlock?: () => void }) {
-  // Simulate boxes opened for demo
+export default function WinPage({ prize, time, onUnlock }: { prize?: string; time?: string; onUnlock?: () => void }) {
   const [boxesOpened, setBoxesOpened] = useState(1);
   const totalBoxes = 5;
+  const safePrize = prize ?? "--";
+  const safeTime = time ?? "--:--";
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/60">
       <div className="rounded-3xl border border-[#2c3447] w-[92vw] max-w-[420px] sm:max-w-[420px] p-0 shadow-none relative bg-gradient-to-br from-[#0f2537] via-[#142c3e] to-[#1a223a]">
@@ -29,16 +30,16 @@ export default function WinPage({ prize = "₦1,000", time = "12:23", onUnlock }
             <div className="absolute top-3 right-3 flex items-center gap-2">
               <span className="flex items-center gap-1 text-xs text-white/70 bg-[#1a223a] rounded px-2 py-1">
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4"><path d="M10 2a8 8 0 100 16 8 8 0 000-16zm.75 12.25h-1.5v-1.5h1.5v1.5zm0-3h-1.5V7h1.5v4.25z" /></svg>
-                {time}
+                {safeTime}
               </span>
             </div>
             <div className="text-center text-lg font-bold text-white mb-2 mt-2 tracking-wide">YOU WON</div>
             <Image src="/images/coin.png" alt="Coin" width={120} height={80} className="mx-auto mb-2" />
             <hr className="border-t border-[#2c3447] w-full my-2 opacity-60" />
-            <div className="text-center text-4xl font-extrabold text-white mb-2">{prize}</div>
+            <div className="text-center text-4xl font-extrabold text-white mb-2">{safePrize}</div>
           </div>
-          <div className="mt-6 mb-2 text-white font-bold text-base">UNLOCK YOUR {prize} BONUS</div>
-          <div className="text-white/80 text-sm mb-4">Play 5 boxes to claim & win up to ₦1,000,000!</div>
+          <div className="mt-6 mb-2 text-white font-bold text-base">UNLOCK YOUR {safePrize} BONUS</div>
+          <div className="text-white/80 text-sm mb-4">Play more boxes to claim your reward from live game data.</div>
           <div className="w-full h-3 bg-[#101B2A] rounded-full mb-2 overflow-hidden">
             <div className="h-full bg-[#22d3aa] rounded-full transition-all duration-500" style={{ width: `${(boxesOpened / totalBoxes) * 100}%` }} />
           </div>

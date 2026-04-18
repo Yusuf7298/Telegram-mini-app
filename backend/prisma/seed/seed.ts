@@ -57,6 +57,12 @@ async function main() {
       { name: "Mega Vault", target: 20, reward: 10000 },
     ],
   });
+
+  await prisma.gameConfig.upsert({
+    where: { id: "global" },
+    create: { id: "global" },
+    update: {},
+  });
   
   console.log("Boxes seeded 🚀");
 }

@@ -46,16 +46,15 @@ function extractWalletPayload(payload: unknown): Record<string, unknown> | null 
   }
 
   const data = payload as Record<string, unknown>;
-  if (data.wallet && typeof data.wallet === 'object') {
-    return data.wallet as Record<string, unknown>;
+  if (data.data && typeof data.data === 'object') {
+    const nestedPayload = extractWalletPayload(data.data);
+    if (nestedPayload) {
+      return nestedPayload;
+    }
   }
 
-  if (
-    Object.prototype.hasOwnProperty.call(data, 'cashBalance') ||
-    Object.prototype.hasOwnProperty.call(data, 'bonusBalance') ||
-    Object.prototype.hasOwnProperty.call(data, 'airtimeBalance')
-  ) {
-    return data;
+  if (data.walletSnapshot && typeof data.walletSnapshot === 'object') {
+    return data.walletSnapshot as Record<string, unknown>;
   }
 
   return null;

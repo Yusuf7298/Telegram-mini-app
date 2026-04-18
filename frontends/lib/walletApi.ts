@@ -17,7 +17,7 @@ export type WalletTransactionApi = {
 
 export type TransactionsData = WalletTransactionApi[] | { transactions?: WalletTransactionApi[] };
 
-export const getWallet = () => api.get<ApiResponse<WalletData>>('/wallet');
-export const getTransactions = () => api.get<ApiResponse<TransactionsData>>('/wallet/transactions');
-export const deposit = (amount: number) => api.post<ApiResponse<{ amount: number }>>('/wallet/deposit', { amount });
-export const withdraw = (amount: number) => api.post<ApiResponse<{ amount: number }>>('/wallet/withdraw', { amount });
+export const getWallet = () => api.get<ApiResponse<WalletData>>('/api/wallet');
+export const getTransactions = () => api.get<ApiResponse<TransactionsData>>('/api/wallet/transactions');
+export const deposit = (amount: number) => api.post<ApiResponse<{ amount: number }>>('/api/wallet/deposit', { amount });
+export const withdraw = (amount: number) => api.post<ApiResponse<{ amount: number }>>('/api/wallet/withdraw', { amount });

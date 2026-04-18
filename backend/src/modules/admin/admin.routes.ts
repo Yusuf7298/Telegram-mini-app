@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { requireAdminAuth } from '../../middleware/adminAuth';
+import { requireAdminAuth, requireSuperAdmin } from '../../middleware/adminAuth';
 import {
   getMetrics,
   createReward,
@@ -16,13 +16,24 @@ import {
   getHighRiskUsersHandler,
   freezeUser,
   revokeReward,
+  listAdmins,
+  createAdmin,
+  getAdminConfig,
+  getGameRewardsConfig,
+  removeAdmin,
+  patchAdminConfig,
+  updateGameRewardsConfig,
+  updateReferralBonus,
   updateConfig,
 } from './admin.controller';
 import { validateBody } from "../../middleware/validate";
 import {
   adminActionSchema,
   adminConfigUpdateSchema,
+  adminCreateRemoveSchema,
   adminFreezeUserSchema,
+  adminGameRewardsConfigSchema,
+  adminReferralBonusSchema,
   adminRevokeSchema,
   adminRewardSchema,
 } from "../../validators/admin.validator";
@@ -30,6 +41,11 @@ import {
 const router = Router();
 
 router.get('/admin/metrics', requireAdminAuth, getMetrics);
+router.get('/admin/list', requireAdminAuth, listAdmins);
+router.get('/admin/config', requireAdminAuth, getAdminConfig);
+router.get('/admin/game-config', requireAdminAuth, getGameRewardsConfig);
+router.post('/admin/create-admin', requireAdminAuth, requireSuperAdmin, validateBody(adminCreateRemoveSchema), createAdmin);
+router.delete('/admin/remove-admin', requireAdminAuth, requireSuperAdmin, validateBody(adminCreateRemoveSchema), removeAdmin);
 router.post('/admin/rewards', requireAdminAuth, validateBody(adminRewardSchema), createReward);
 router.put('/admin/rewards/:id', requireAdminAuth, validateBody(adminRewardSchema), updateReward);
 router.delete('/admin/rewards/:id', requireAdminAuth, deleteReward);
@@ -46,6 +62,10 @@ router.get('/admin/db-integrity', requireAdminAuth, verifyWalletConstraintIntegr
 router.get('/admin/runtime-check', requireAdminAuth, runtimeCheckHandler);
 router.get('/admin/fraud-events', requireAdminAuth, getFraudEventsHandler);
 router.get('/admin/high-risk-users', requireAdminAuth, getHighRiskUsersHandler);
+router.post('/admin/referral-bonus', requireAdminAuth, validateBody(adminReferralBonusSchema), updateReferralBonus);
+router.patch('/admin/config', requireAdminAuth, validateBody(adminGameRewardsConfigSchema), patchAdminConfig);
+router.put('/admin/game-config', requireAdminAuth, validateBody(adminGameRewardsConfigSchema), updateGameRewardsConfig);
+router.patch('/admin/game-config', requireAdminAuth, validateBody(adminGameRewardsConfigSchema), patchAdminConfig);
 
 // NEW: User endpoints
 router.post('/user/freeze', requireAdminAuth, validateBody(adminFreezeUserSchema), freezeUser);

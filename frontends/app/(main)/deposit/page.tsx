@@ -1,7 +1,11 @@
 "use client";
 import { useState } from "react";
-import { ArrowLeft, BellIcon, CreditCard, Landmark } from "lucide-react";
+import { ArrowLeft, CreditCard, Landmark } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { deposit } from "@/lib/walletApi";
+import { useWalletStore } from "@/store/walletStore";
+import { useToast } from "@/components/ui/ToastProvider";
+import NotificationCenter from "@/components/notification/NotificationCenter";
 
 type DepositMethod = "card" | "bank";
 
@@ -33,6 +37,9 @@ export default function DepositPage() {
   const [error, setError] = useState("");
   const [fieldErrors, setFieldErrors] = useState<DepositFieldErrors>({});
   const router = useRouter();
+  const updateWalletFromResponse = useWalletStore((state) => state.updateWalletFromResponse);
+  const fetchWallet = useWalletStore((state) => state.fetchWallet);
+  const { showToast } = useToast();
 
   const validate = () => {
     const errs: DepositFieldErrors = {};
@@ -40,7 +47,7 @@ export default function DepositPage() {
     if (!form.card.match(/^\d{16}$/)) errs.card = "Card number must be 16 digits";
     if (!form.expiry.match(/^(0[1-9]|1[0-2])\/(\d{2})$/)) errs.expiry = "MM/YY format";
     if (!form.cvv.match(/^\d{3,4}$/)) errs.cvv = "CVV must be 3 or 4 digits";
-    if (!form.amount || isNaN(Number(form.amount)) || Number(form.amount) < 100) errs.amount = "Min ₦100";
+    if (!form.amount || isNaN(Number(form.amount)) || Number(form.amount) <= 0) errs.amount = "Enter a valid amount";
     setFieldErrors(errs);
     setError("");
     return Object.keys(errs).length === 0;
@@ -54,11 +61,33 @@ export default function DepositPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!validate()) return;
+
+    const amount = Number(form.amount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setError("Enter a valid amount");
+      return;
+    }
+
     setLoading(true);
-    setTimeout(() => {
+    try {
+      const response = await deposit(amount);
+      const updated = updateWalletFromResponse(response.data);
+      if (!updated) {
+        await fetchWallet();
+      }
+
+      showToast({ type: "success", message: `Deposit successful: ${amount.toLocaleString()}` });
+      setForm((current) => ({
+        ...current,
+        amount: "",
+      }));
+      setError("");
+    } catch {
+      setError("Deposit failed");
+      showToast({ type: "error", message: "Deposit failed" });
+    } finally {
       setLoading(false);
-      // Simulate deposit
-    }, 1200);
+    }
   };
 
   function handleClick() {
@@ -76,9 +105,7 @@ export default function DepositPage() {
           <ArrowLeft className="h-6 w-6" />
         </button>
         <div className="text-white font-bold text-[16px]">Deposit</div>
-        <button className="w-10 h-10 flex items-center justify-center rounded-full bg-white/10 text-white">
-          <BellIcon className="h-7 w-7 text-current m-2" />
-        </button>
+        <NotificationCenter />
       </div>
         <div className="flex-1 px-4 pt-10">
           <div className="rounded-[28px] border border-white/10 bg-[#0b1526]/80 p-5 shadow-[0_18px_60px_rgba(0,0,0,0.35)] backdrop-blur-sm">

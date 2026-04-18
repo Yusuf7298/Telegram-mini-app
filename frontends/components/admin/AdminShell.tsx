@@ -10,6 +10,7 @@ import { Skeleton } from '@/components/ui/Skeleton';
 
 const navItems = [
   { href: '/admin/users', label: 'Users' },
+  { href: '/admin/admins', label: 'Admin Control', superAdminOnly: true },
   { href: '/admin/rewards', label: 'Rewards' },
   { href: '/admin/transactions', label: 'Transactions' },
   { href: '/admin/config', label: 'System Config' },
@@ -21,21 +22,27 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
   const user = useAuthStore((state) => state.user);
   const { adminSecret, setAdminSecret } = useAdminContext();
   const [checkingAuth, setCheckingAuth] = useState(true);
+  const isAdminOrSuperAdmin = user?.role === 'ADMIN' || user?.role === 'SUPER_ADMIN';
+  const isSuperAdmin = user?.role === 'SUPER_ADMIN';
+
+  const visibleNavItems = useMemo(
+    () => navItems.filter((item) => !item.superAdminOnly || isSuperAdmin),
+    [isSuperAdmin],
+  );
 
   useEffect(() => {
-    const isAdmin = user?.role === 'ADMIN';
-    if (!isAdmin) {
+    if (!isAdminOrSuperAdmin) {
       router.replace('/');
       return;
     }
 
     setCheckingAuth(false);
-  }, [router, user]);
+  }, [isAdminOrSuperAdmin, router]);
 
   const title = useMemo(() => {
-    const active = navItems.find((item) => pathname?.startsWith(item.href));
+    const active = visibleNavItems.find((item) => pathname?.startsWith(item.href));
     return active?.label ?? 'Admin';
-  }, [pathname]);
+  }, [pathname, visibleNavItems]);
 
   if (checkingAuth) {
     return (
@@ -58,7 +65,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
         <aside className="hidden w-64 shrink-0 rounded-2xl border border-white/10 bg-[#121b2d] p-4 md:block">
           <div className="mb-4 text-lg font-bold">Admin Console</div>
           <nav className="space-y-2">
-            {navItems.map((item) => {
+            {visibleNavItems.map((item) => {
               const active = pathname?.startsWith(item.href);
               return (
                 <Link
@@ -94,7 +101,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
             </div>
 
             <nav className="mt-3 grid grid-cols-2 gap-2 md:hidden">
-              {navItems.map((item) => {
+              {visibleNavItems.map((item) => {
                 const active = pathname?.startsWith(item.href);
                 return (
                   <Link

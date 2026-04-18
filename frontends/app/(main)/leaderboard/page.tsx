@@ -1,12 +1,7 @@
 "use client";
 
-const leaderboard = [
-  { rank: 1, username: "Jane", score: 12000, reward: 10000 },
-  { rank: 2, username: "Sam", score: 9000, reward: 5000 },
-  { rank: 3, username: "Alex", score: 7000, reward: 2000 },
-  { rank: 4, username: "Mary", score: 5000, reward: 1000 },
-  { rank: 5, username: "John", score: 3000, reward: 500 },
-];
+import { useEffect, useState } from "react";
+import { getTopWinners, TopWinner } from "@/lib/statsApi";
 
 const rankStyles = [
   "bg-gradient-to-r from-yellow-400 to-yellow-200 text-yellow-900",
@@ -15,29 +10,66 @@ const rankStyles = [
 ];
 
 export default function LeaderboardPage() {
+  const [players, setPlayers] = useState<TopWinner[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const loadLeaderboard = async () => {
+      setLoading(true);
+      setError(null);
+
+      try {
+        const response = await getTopWinners(20);
+        setPlayers(response.data.data.winners);
+      } catch {
+        setPlayers([]);
+        setError("Failed to load leaderboard");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    void loadLeaderboard();
+  }, []);
+
   return (
-    <div className="px-4 flex flex-col items-center">
-      <div className="w-full max-w-sm bg-[#101B2A] rounded-2xl shadow-lg p-6 flex flex-col items-center mt-8 mb-4">
-        <h1 className="text-2xl font-bold text-white mb-4">Leaderboard</h1>
-        <div className="w-full">
-          <div className="flex font-bold text-gray-300 border-b border-[#232B3C] pb-2 mb-2">
-            <div className="w-10">Rank</div>
-            <div className="flex-1">Username</div>
-            <div className="w-16 text-right">Score</div>
-            <div className="w-16 text-right">Reward</div>
+    <div className="flex flex-col items-center px-4">
+      <div className="mt-8 mb-4 flex w-full max-w-sm flex-col items-center rounded-2xl bg-[#101B2A] p-6 shadow-lg">
+        <h1 className="mb-4 text-2xl font-bold text-white">Leaderboard</h1>
+
+        {loading ? (
+          <div className="w-full space-y-2">
+            {Array.from({ length: 5 }).map((_, idx) => (
+              <div key={`leaderboard-skeleton-${idx}`} className="h-12 animate-pulse rounded-lg bg-white/10" />
+            ))}
           </div>
-          {leaderboard.map((player, i) => (
-            <div
-              key={player.rank}
-              className={`flex items-center py-2 px-2 mb-2 rounded-lg ${i < 3 ? rankStyles[i] : "bg-[#19233A] text-white"}`}
-            >
-              <div className="w-10 font-bold">{player.rank}</div>
-              <div className="flex-1 font-semibold">{player.username}</div>
-              <div className="w-16 text-right">{player.score}</div>
-              <div className="w-16 text-right text-green-400 font-bold">₦{player.reward}</div>
+        ) : error ? (
+          <div className="w-full rounded-lg bg-white/10 px-3 py-4 text-sm text-red-300">{error}</div>
+        ) : players.length === 0 ? (
+          <div className="w-full rounded-lg bg-white/10 px-3 py-4 text-sm text-white/70">No leaderboard data available</div>
+        ) : (
+          <div className="w-full">
+            <div className="mb-2 flex border-b border-[#232B3C] pb-2 font-bold text-gray-300">
+              <div className="w-10">Rank</div>
+              <div className="flex-1">Username</div>
+              <div className="w-16 text-right">Wins</div>
+              <div className="w-20 text-right">Earnings</div>
             </div>
-          ))}
-        </div>
+
+            {players.map((player, i) => (
+              <div
+                key={player.userId}
+                className={`mb-2 flex items-center rounded-lg px-2 py-2 ${i < 3 ? rankStyles[i] : "bg-[#19233A] text-white"}`}
+              >
+                <div className="w-10 font-bold">{i + 1}</div>
+                <div className="flex-1 font-semibold">{player.username}</div>
+                <div className="w-16 text-right">{player.totalWins}</div>
+                <div className="w-20 text-right font-bold text-green-400">₦{Math.max(0, player.totalEarnings).toLocaleString()}</div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

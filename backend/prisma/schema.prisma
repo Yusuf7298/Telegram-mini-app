@@ -25,13 +25,31 @@ enum TransactionType {
   FREE_BOX
   REFERRAL
   VAULT_REWARD
+  DAILY_REWARD
   WELCOME_BONUS
+}
+
+enum Role {
+  USER
+  ADMIN
+  SUPER_ADMIN
+}
+
+enum ReferralStatus {
+  PENDING
+  JOINED
+  ACTIVE
 }
 
 model User {
   id                   String   @id @default(uuid())
+  telegramId           String?  @unique
   platformId           String   @unique
   username             String?
+  firstName            String?
+  lastName             String?
+  profilePhotoUrl      String?
+  role                 Role     @default(USER)
   referralCode         String   @unique
   referredById         String?
   deviceHash           String?
@@ -50,9 +68,12 @@ model User {
   waitlistBonusGranted Boolean  @default(false)
   waitlistBonusUnlocked Boolean @default(false)
   welcomeBonusUnlocked Boolean  @default(false)
+  dailyRewardStreak     Int      @default(0)
+  lastDailyRewardClaimAt DateTime?
   createdAt            DateTime @default(now())
-  referralRewardPending Boolean @default(false)
-  referralActivityMet   Boolean @default(false)
+  referralStatus       ReferralStatus @default(PENDING)
+  referralJoinedAt     DateTime?
+  referralActivatedAt  DateTime?
   isFrozen              Boolean @default(false)
   wallet          Wallet?
   userVaults      UserVault[]
@@ -66,6 +87,8 @@ model User {
   suspiciousLogs SuspiciousActionLog[]
   auditLogs      AuditLog[]
   rewardRevokes  RewardRevocation[]
+  referralRewardGrantsGiven ReferralRewardGrant[] @relation("ReferralRewardGrantsGiven")
+  referralRewardGrantReceived ReferralRewardGrant? @relation("ReferralRewardGrantReceived")
   referredBy User?  @relation("UserReferredBy", fields: [referredById], references: [id])
   referrals  User[] @relation("UserReferredBy")
   @@index([createdIp])
@@ -171,6 +194,20 @@ model ReferralLog {
   @@index([deviceId])
 }
 
+model ReferralRewardGrant {
+  id             String   @id @default(uuid())
+  referrerId     String
+  referredUserId String   @unique
+  amount         Decimal  @db.Decimal(10, 2)
+  sourceAction   String
+  createdAt      DateTime @default(now())
+
+  referrer User @relation("ReferralRewardGrantsGiven", fields: [referrerId], references: [id])
+  referred User @relation("ReferralRewardGrantReceived", fields: [referredUserId], references: [id])
+
+  @@index([referrerId, createdAt])
+}
+
 model BoxOpenLog {
   id         String   @id @default(uuid())
   userId     String
@@ -240,8 +277,28 @@ model SystemStats {
 }
 
 model GameConfig {
-  id          String @id @default("global")
-  rtpModifier Float  @default(1)
+  id                   String  @id @default("global")
+  rtpModifier          Float   @default(1)
+  maxPayoutMultiplier  Decimal @default(1.2) @db.Decimal(10, 4)
+  minRtpModifier       Decimal @default(1) @db.Decimal(10, 4)
+  maxRtpModifier       Decimal @default(1.2) @db.Decimal(10, 4)
+  referralRewardAmount Decimal @default(200) @db.Decimal(10, 2)
+  freeBoxRewardAmount  Decimal @default(200) @db.Decimal(10, 2)
+  minBoxReward         Int     @default(150)
+  maxBoxReward         Int     @default(251)
+  waitlistBonus        Int     @default(1000)
+  maxPlaysPerDay       Int     @default(5)
+  withdrawMinPlays     Int     @default(5)
+  withdrawCooldownMs   Int     @default(60000)
+  withdrawRiskThreshold Int    @default(70)
+  maxReferralsPerIpPerDay Int  @default(5)
+  waitlistRiskThreshold Int    @default(50)
+  rapidOnboardingWindowMs Int  @default(10000)
+  minPlayIntervalMs    Int     @default(300)
+  referralWindowMs     Int     @default(86400000)
+  dailyRewardTable     String  @default("[100,125,150,175,200,250,300]")
+  dailyRewardBigWinThreshold Int @default(1000)
+  winHistoryBigWinThreshold  Int @default(1000)
 }
 
 model TelegramAuthLog {

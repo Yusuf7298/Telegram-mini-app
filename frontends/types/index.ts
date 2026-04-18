@@ -31,7 +31,9 @@ export interface User {
 
 export interface Notification {
   id: string;
-  icon: string;
+  kind: 'reward' | 'referral' | 'wallet' | 'system';
+  title: string;
   message: string;
-  date: string;
+  createdAt: string;
+  read: boolean;
 }

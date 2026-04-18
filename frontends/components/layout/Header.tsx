@@ -1,7 +1,4 @@
-import { UserCircle } from 'lucide-react';
-import Image from 'next/image';
-
-import { Bell } from 'lucide-react';
+import NotificationCenter from '@/components/notification/NotificationCenter';
 
 export function Header({ title = "Home" }: { title?: string }) {
   return (
@@ -18,9 +15,7 @@ export function Header({ title = "Home" }: { title?: string }) {
       </div>
       {/* Right: Circular Notification Icon */}
       <div className="flex items-center">
-        <button className="w-14 h-14 rounded-full bg-[#1DE1B6] flex items-center justify-center border-2 border-white">
-          <Bell className="w-7 h-7 text-white" />
-        </button>
+        <NotificationCenter />
       </div>
     </header>
   );

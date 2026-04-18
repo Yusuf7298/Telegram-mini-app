@@ -17,16 +17,19 @@ export interface WalletData {
   cashBalance: number;
   bonusBalance: number;
 }
-
-export type UserRole = 'USER' | 'ADMIN';
+export type UserRole = 'USER' | 'ADMIN' | 'SUPER_ADMIN';
 
 // --- Entity Types ---
 export interface User {
   id: string;
+  telegramId?: string | null;
   role: UserRole;
-  username: string;
-  phone: string;
-  avatar?: string;
+  username?: string | null;
+  firstName?: string | null;
+  lastName?: string | null;
+  profilePhotoUrl?: string | null;
+  referralCode?: string | null;
+  freeBoxUsed?: boolean;
 }
 export interface Prize {
   id: string;

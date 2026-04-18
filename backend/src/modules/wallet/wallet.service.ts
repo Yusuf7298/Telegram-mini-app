@@ -6,10 +6,9 @@ import { createIdempotencyKey, checkIdempotencyKey, completeIdempotencyKey } fro
 import { logSuspiciousAction } from "../../services/suspiciousActionLog.service";
 import { logStructuredEvent } from "../../services/logger";
 import { recordWithdrawAttempt } from "../../services/fraudDetection.service";
-
-const WITHDRAW_BLOCK_RISK_THRESHOLD = 70;
-const WITHDRAW_MIN_PLAYS = 5;
-const WITHDRAW_REWARD_COOLDOWN_MS = 60 * 1000;
+import { logAudit } from "../../services/auditLog.service";
+import { canUserWithdraw } from "../../services/rules.service";
+import { ZERO } from "../../constants/numbers";
 
 function toDecimal(value: Prisma.Decimal | string | number) {
   return value instanceof Prisma.Decimal ? value : new Prisma.Decimal(value);
@@ -21,7 +20,7 @@ export async function depositWallet(
   idempotencyKey: string
 ) {
   const amount = toDecimal(amountInput);
-  if (amount.lte(0)) throw new Error("Amount must be greater than zero");
+  if (amount.lte(ZERO)) throw new Error("Amount must be greater than zero");
 
   return withUserLock(userId, async () => {
     return withTransactionRetry(prisma, async (tx) => {
@@ -88,7 +87,7 @@ export async function depositWallet(
         timestamp: new Date().toISOString(),
       });
 
-      if (updated.count === 0) {
+      if (updated.count === ZERO) {
         throw new Error("Balance changed, please retry");
       }
 
@@ -146,7 +145,7 @@ export async function withdrawWallet(
   idempotencyKey: string
 ) {
   const amount = toDecimal(amountInput);
-  if (amount.lte(0)) throw new Error("Amount must be greater than zero");
+  if (amount.lte(ZERO)) throw new Error("Amount must be greater than zero");
 
   return withUserLock(userId, async () => {
     return withTransactionRetry(prisma, async (tx) => {
@@ -200,54 +199,47 @@ export async function withdrawWallet(
         throw new Error("User not found");
       }
 
-      if (user.isFrozen || user.accountStatus === "FROZEN" || user.riskScore > WITHDRAW_BLOCK_RISK_THRESHOLD) {
-        await logSuspiciousAction({
-          userId,
-          type: "withdrawal_risk",
-          metadata: {
-            reason: user.isFrozen ? "frozen_account_withdraw_attempt" : "high_risk_withdraw_attempt",
-            riskScore: user.riskScore,
-            accountStatus: user.accountStatus,
-            isFrozen: user.isFrozen,
-          },
-          tx,
-        });
-        throw new Error("Withdrawals are restricted for this account");
-      }
-
-      if (user.totalPlaysCount < WITHDRAW_MIN_PLAYS) {
-        await logSuspiciousAction({
-          userId,
-          type: "withdrawal_risk",
-          metadata: {
-            reason: "minimum_play_requirement_not_met",
-            totalPlaysCount: user.totalPlaysCount,
-            required: WITHDRAW_MIN_PLAYS,
-          },
-          tx,
-        });
-        throw new Error("Minimum gameplay activity required before withdrawal");
-      }
-
       const latestReward = await tx.transaction.findFirst({
         where: { userId, type: "BOX_REWARD" },
         orderBy: { createdAt: "desc" },
         select: { createdAt: true },
       });
 
-      if (latestReward) {
-        const sinceRewardMs = Date.now() - latestReward.createdAt.getTime();
-        if (sinceRewardMs < WITHDRAW_REWARD_COOLDOWN_MS) {
-          await logSuspiciousAction({
-            userId,
-            type: "withdrawal_risk",
-            metadata: {
-              reason: "reward_cooldown",
-              cooldownMs: WITHDRAW_REWARD_COOLDOWN_MS,
-              elapsedMs: sinceRewardMs,
-            },
-            tx,
-          });
+      const withdrawRule = await canUserWithdraw({
+        user,
+        lastRewardAt: latestReward?.createdAt ?? null,
+        client: tx,
+      });
+
+      if (!withdrawRule.allowed) {
+        await logSuspiciousAction({
+          userId,
+          type: "withdrawal_risk",
+          metadata: {
+            reason: withdrawRule.reason,
+            riskScore: user.riskScore,
+            accountStatus: user.accountStatus,
+            isFrozen: user.isFrozen,
+            totalPlaysCount: user.totalPlaysCount,
+            required: withdrawRule.requiredMinPlays,
+            cooldownMs: withdrawRule.cooldownMs,
+            elapsedMs: withdrawRule.elapsedMs,
+          },
+          tx,
+        });
+
+        if (
+          withdrawRule.reason === "frozen_account_withdraw_attempt" ||
+          withdrawRule.reason === "high_risk_withdraw_attempt"
+        ) {
+          throw new Error("Withdrawals are restricted for this account");
+        }
+
+        if (withdrawRule.reason === "minimum_play_requirement_not_met") {
+          throw new Error("Minimum gameplay activity required before withdrawal");
+        }
+
+        if (withdrawRule.reason === "reward_cooldown") {
           throw new Error("Withdrawal is temporarily locked after recent rewards");
         }
       }
@@ -267,7 +259,7 @@ export async function withdrawWallet(
         });
       }
 
-      const withdrawableBonus = wallet.bonusLocked ? new Prisma.Decimal(0) : wallet.bonusBalance;
+      const withdrawableBonus = wallet.bonusLocked ? new Prisma.Decimal(ZERO) : wallet.bonusBalance;
       const withdrawableTotal = wallet.cashBalance.plus(withdrawableBonus);
       if (withdrawableTotal.lt(amount)) throw new Error("Insufficient withdrawable balance");
 
@@ -298,7 +290,7 @@ export async function withdrawWallet(
         timestamp: new Date().toISOString(),
       });
 
-      if (updated.count === 0) {
+      if (updated.count === ZERO) {
         throw new Error("Balance changed, please retry");
       }
 
@@ -317,17 +309,42 @@ export async function withdrawWallet(
         },
       });
 
+      await logAudit({
+        userId,
+        action: "wallet_withdraw",
+        details: {
+          amount: amount.toString(),
+          cashUsed: cashUsed.toString(),
+          bonusUsed: bonusUsed.toString(),
+          idempotencyKey,
+        },
+        tx,
+      });
+
       const walletAfter = await tx.wallet.findUnique({ where: { userId } });
       if (!walletAfter) throw new Error("Wallet not found");
 
       const completedResponse = await completeIdempotencyKey({
         id: idempotencyKey,
         userId,
-        response: walletAfter,
+        response: {
+          walletSnapshot: {
+            cashBalance: walletAfter.cashBalance,
+            bonusBalance: walletAfter.bonusBalance,
+            airtimeBalance: ZERO,
+          },
+          cashBalance: walletAfter.cashBalance,
+          bonusBalance: walletAfter.bonusBalance,
+          airtimeBalance: ZERO,
+        },
         metadata: {
           action: "walletWithdraw",
           amount: amount.toString(),
-          walletSnapshot: walletAfter,
+          walletSnapshot: {
+            cashBalance: walletAfter.cashBalance,
+            bonusBalance: walletAfter.bonusBalance,
+            airtimeBalance: ZERO,
+          },
         },
         tx,
       });
@@ -358,17 +375,17 @@ export async function withdrawWallet(
 export async function checkWalletIntegrity(userId: string) {
   const wallet = await prisma.wallet.findUnique({ where: { userId } });
   if (!wallet) return false;
-  return wallet.cashBalance.gte(0) && wallet.bonusBalance.gte(0);
+  return wallet.cashBalance.gte(ZERO) && wallet.bonusBalance.gte(ZERO);
 }
 
 export async function credit(userId: string, amount: Prisma.Decimal, _meta: any = {}, tx: Prisma.TransactionClient) {
-  if (amount.lte(0)) throw new Error("Amount must be greater than zero");
+  if (amount.lte(ZERO)) throw new Error("Amount must be greater than zero");
   await tx.wallet.update({ where: { userId }, data: { cashBalance: { increment: amount } } });
   return tx.wallet.findUnique({ where: { userId } });
 }
 
 export async function debit(userId: string, amount: Prisma.Decimal, _meta: any = {}, tx: Prisma.TransactionClient) {
-  if (amount.lte(0)) throw new Error("Amount must be greater than zero");
+  if (amount.lte(ZERO)) throw new Error("Amount must be greater than zero");
   const wallet = await tx.wallet.findUnique({ where: { userId } });
   if (!wallet || wallet.cashBalance.lt(amount)) throw new Error("Insufficient cash balance");
   await tx.wallet.update({ where: { userId }, data: { cashBalance: { decrement: amount } } });

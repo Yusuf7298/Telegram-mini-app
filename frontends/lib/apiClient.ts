@@ -19,14 +19,18 @@ function getOrCreateDeviceId(): string | null {
   return null;
 }
 
-if (env.NODE_ENV === "production" && !env.API_BASE_URL.toLowerCase().startsWith("https://")) {
-  throw new Error("NEXT_PUBLIC_API_URL must use HTTPS in production");
-}
-
-const resolvedApiBaseUrl = env.API_BASE_URL;
-
 function resolveApiBaseUrl(): string {
-  return resolvedApiBaseUrl.replace(/\/$/, "");
+  const apiBaseUrl = env.API_BASE_URL?.trim();
+
+  if (apiBaseUrl) {
+    if (env.NODE_ENV === "production" && !apiBaseUrl.toLowerCase().startsWith("https://")) {
+      return "https://localhost:5000/api";
+    }
+
+    return apiBaseUrl.replace(/\/$/, "");
+  }
+
+  return "https://localhost:5000/api";
 }
 
 type BackendErrorPayload = {
@@ -35,9 +39,9 @@ type BackendErrorPayload = {
   message?: string;
 };
 function mapApiErrorMessage(status?: number): string {
-  if (status === 429) return "Too many requests, wait";
-  if (status === 409) return "Duplicate request detected";
-  if (status === 500) return "Something went wrong";
+  if (status === 429) return "Too fast, wait";
+  if (status === 409) return "Duplicate request";
+  if (status === 500) return "Try again";
   if (status === 401) return "Unauthorized";
   return "Something went wrong";
 }

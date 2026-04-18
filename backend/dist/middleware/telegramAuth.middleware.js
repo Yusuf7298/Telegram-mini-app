@@ -40,7 +40,7 @@ async function verifyTelegramAuth(req, res, next) {
             return res.status((0, apiResponse_1.getErrorStatus)("INVALID_INPUT")).json((0, apiResponse_1.structuredError)("INVALID_INPUT", "Missing Telegram user info"));
         }
         const telegramUserId = String(telegramUser.id);
-        // User rules: platformId must equal Telegram user id
+        // Telegram identity source of truth is telegramId.
         const user = await (0, auth_service_1.findOrCreateTelegramUser)(telegramUserId, telegramUser.username, telegramUser, req.ip, req.headers["x-device-id"] || undefined, req.headers["user-agent"]);
         if (!user) {
             await logSuspiciousLoginAttempt({ reason: "User bootstrap failed", telegramUserId });
@@ -48,7 +48,7 @@ async function verifyTelegramAuth(req, res, next) {
         }
         // Attach user info to request context
         req.user = user;
-        req.userId = user.platformId;
+        req.userId = user.id;
         next();
     }
     catch (err) {

@@ -19,12 +19,18 @@ function getOrCreateDeviceId(): string | null {
   return null;
 }
 
-if (env.NODE_ENV === 'production' && !env.API_BASE_URL.toLowerCase().startsWith('https://')) {
-  throw new Error('NEXT_PUBLIC_API_URL must use HTTPS in production');
-}
-
 function resolveApiBaseUrl(): string {
-  return env.API_BASE_URL.replace(/\/$/, '');
+  const apiBaseUrl = env.API_BASE_URL?.trim();
+
+  if (apiBaseUrl) {
+    if (env.NODE_ENV === 'production' && !apiBaseUrl.toLowerCase().startsWith('https://')) {
+      return 'https://localhost:5000/api';
+    }
+
+    return apiBaseUrl.replace(/\/$/, '');
+  }
+
+  return 'https://localhost:5000/api';
 }
 
 const api = axios.create({

@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.adminConfigUpdateSchema = exports.adminRevokeSchema = exports.adminFreezeUserSchema = exports.adminRewardSchema = exports.adminActionSchema = void 0;
+exports.adminGameRewardsConfigSchema = exports.adminConfigPatchSchema = exports.adminReferralBonusSchema = exports.adminCreateRemoveSchema = exports.adminConfigUpdateSchema = exports.adminRevokeSchema = exports.adminFreezeUserSchema = exports.adminRewardSchema = exports.adminActionSchema = void 0;
 const zod_1 = require("zod");
 exports.adminActionSchema = zod_1.z.object({
     action: zod_1.z.string().min(3).max(32),
@@ -32,3 +32,24 @@ exports.adminRevokeSchema = zod_1.z.object({
     message: "transactionId or targetId is required",
 });
 exports.adminConfigUpdateSchema = zod_1.z.record(zod_1.z.string(), zod_1.z.unknown());
+exports.adminCreateRemoveSchema = zod_1.z.object({
+    userId: zod_1.z.string().min(1).max(64),
+}).strict();
+exports.adminReferralBonusSchema = zod_1.z.object({
+    referralRewardAmount: zod_1.z.union([zod_1.z.string(), zod_1.z.number()]),
+}).strict();
+const adminRewardConfigFields = {
+    referralRewardAmount: zod_1.z.union([zod_1.z.string(), zod_1.z.number()]).optional(),
+    freeBoxRewardAmount: zod_1.z.union([zod_1.z.string(), zod_1.z.number()]).optional(),
+    minBoxReward: zod_1.z.union([zod_1.z.string(), zod_1.z.number()]).optional(),
+    maxBoxReward: zod_1.z.union([zod_1.z.string(), zod_1.z.number()]).optional(),
+    waitlistBonus: zod_1.z.union([zod_1.z.string(), zod_1.z.number()]).optional(),
+};
+exports.adminConfigPatchSchema = zod_1.z.object(adminRewardConfigFields).strict().refine((value) => value.referralRewardAmount !== undefined ||
+    value.freeBoxRewardAmount !== undefined ||
+    value.minBoxReward !== undefined ||
+    value.maxBoxReward !== undefined ||
+    value.waitlistBonus !== undefined, {
+    message: "At least one reward amount is required",
+});
+exports.adminGameRewardsConfigSchema = exports.adminConfigPatchSchema;

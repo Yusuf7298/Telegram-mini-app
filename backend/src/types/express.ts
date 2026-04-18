@@ -3,7 +3,7 @@ declare module "express-serve-static-core" {
     userId?: string;
     user?: {
       id?: string;
-      role?: string;
+      role?: "USER" | "ADMIN" | "SUPER_ADMIN";
     };
     tx?: unknown;
   }

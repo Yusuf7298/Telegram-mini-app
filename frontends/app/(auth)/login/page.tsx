@@ -1,6 +1,5 @@
 "use client";
 import { useState } from "react";
-import Link from "next/link";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/hooks/useAuth";
@@ -44,10 +43,6 @@ export default function LoginPage() {
             {loading ? "Signing in..." : "Continue with Telegram"}
           </button>
         </form>
-        <div className="mt-4 flex w-full flex-wrap items-center justify-between gap-2 text-sm">
-          <Link href="/forgot-password" className="text-blue-400 hover:underline">Forgot Password?</Link>
-          <Link href="/signup" className="text-blue-400 hover:underline">Sign Up</Link>
-        </div>
       </div>
     </div>
   );

@@ -6,7 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.findOrCreateTelegramUser = findOrCreateTelegramUser;
 const db_1 = require("../config/db");
 const crypto_1 = __importDefault(require("crypto"));
-const WAITLIST_BONUS_AMOUNT = 1000;
+const gameConfig_service_1 = require("./gameConfig.service");
 const RISK_BONUS_DISABLE_THRESHOLD = 50;
 function makeReferralCode(seed) {
     return crypto_1.default.createHash("sha256").update(seed).digest("hex").slice(0, 8).toUpperCase();
@@ -26,14 +26,19 @@ function resolveAccountStatus(riskScore) {
         return "RESTRICTED";
     return "ACTIVE";
 }
+async function getWaitlistBonusAmount() {
+    const config = await (0, gameConfig_service_1.getValidatedGameConfig)();
+    return config.waitlistBonus;
+}
 async function findOrCreateTelegramUser(telegramUserId, username, userInfo, signupIp, signupDeviceId, userAgent) {
-    let user = await db_1.prisma.user.findUnique({ where: { platformId: telegramUserId } });
+    let user = await db_1.prisma.user.findUnique({ where: { telegramId: telegramUserId } });
     const normalizedIp = signupIp || "unknown";
     const deviceHash = computeDeviceHash({
         signupDeviceId,
         userAgent,
         signupIp: normalizedIp,
     });
+    const waitlistBonusAmount = await getWaitlistBonusAmount();
     if (!user) {
         // Generate a unique referral code (short hash)
         let referralCode = makeReferralCode(telegramUserId + Date.now());
@@ -59,8 +64,18 @@ async function findOrCreateTelegramUser(telegramUserId, username, userInfo, sign
         user = await db_1.prisma.$transaction(async (tx) => {
             const createdUser = await tx.user.create({
                 data: {
+                    telegramId: telegramUserId,
                     platformId: telegramUserId,
                     username: username || userInfo?.username || null,
+                    firstName: typeof userInfo?.first_name === "string" && userInfo.first_name.trim()
+                        ? userInfo.first_name.trim()
+                        : null,
+                    lastName: typeof userInfo?.last_name === "string" && userInfo.last_name.trim()
+                        ? userInfo.last_name.trim()
+                        : null,
+                    profilePhotoUrl: typeof userInfo?.photo_url === "string" && userInfo.photo_url.trim()
+                        ? userInfo.photo_url.trim()
+                        : null,
                     referralCode,
                     deviceHash,
                     createdIp: normalizedIp,
@@ -75,7 +90,7 @@ async function findOrCreateTelegramUser(telegramUserId, username, userInfo, sign
                     totalPlaysCount: 0,
                     wallet: {
                         create: {
-                            bonusBalance: waitlistBonusEligible ? WAITLIST_BONUS_AMOUNT : 0,
+                            bonusBalance: waitlistBonusEligible ? waitlistBonusAmount : 0,
                             bonusLocked: true,
                         },
                     },
@@ -118,7 +133,7 @@ async function findOrCreateTelegramUser(telegramUserId, username, userInfo, sign
             await tx.wallet.update({
                 where: { userId: refreshed.id },
                 data: {
-                    bonusBalance: { increment: eligibleByRisk ? WAITLIST_BONUS_AMOUNT : 0 },
+                    bonusBalance: { increment: eligibleByRisk ? waitlistBonusAmount : 0 },
                     bonusLocked: true,
                 },
             });
@@ -140,13 +155,25 @@ async function findOrCreateTelegramUser(telegramUserId, username, userInfo, sign
                 });
             }
         });
-        user = await db_1.prisma.user.findUnique({ where: { platformId: telegramUserId } });
+        user = await db_1.prisma.user.findUnique({ where: { telegramId: telegramUserId } });
     }
     else {
         const existingAccountStatus = resolveAccountStatus(user.riskScore);
         user = await db_1.prisma.user.update({
             where: { id: user.id },
             data: {
+                username: username || userInfo?.username || user.username,
+                firstName: typeof userInfo?.first_name === "string" && userInfo.first_name.trim()
+                    ? userInfo.first_name.trim()
+                    : user.firstName,
+                lastName: typeof userInfo?.last_name === "string" && userInfo.last_name.trim()
+                    ? userInfo.last_name.trim()
+                    : user.lastName,
+                profilePhotoUrl: typeof userInfo?.photo_url === "string" && userInfo.photo_url.trim()
+                    ? userInfo.photo_url.trim()
+                    : user.profilePhotoUrl,
+                telegramId: telegramUserId,
+                platformId: telegramUserId,
                 deviceHash,
                 lastLoginIp: normalizedIp,
                 accountStatus: existingAccountStatus,

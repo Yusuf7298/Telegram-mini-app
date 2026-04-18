@@ -45,7 +45,7 @@ function requireAdmin(req, res, next) {
     }
     try {
         const payload = jsonwebtoken_1.default.verify(token, secret);
-        if (payload.role !== 'admin') {
+        if (payload.role !== 'ADMIN' && payload.role !== 'SUPER_ADMIN') {
             return res.status((0, apiResponse_1.getErrorStatus)('FORBIDDEN')).json((0, apiResponse_1.structuredError)('FORBIDDEN', 'Forbidden: Admins only'));
         }
         req.user = payload;

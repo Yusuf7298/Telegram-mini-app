@@ -10,6 +10,42 @@ function getRequestUserId(req: Request): string | undefined {
   return (req as Request & { userId?: string }).userId;
 }
 
+async function ensureWalletSnapshotInResponseData(payload: unknown, userId: string) {
+  if (payload && typeof payload === "object") {
+    const data = payload as Record<string, unknown>;
+    if (data.walletSnapshot && typeof data.walletSnapshot === "object") {
+      return payload;
+    }
+  }
+
+  const wallet = await prisma.wallet.findUnique({
+    where: { userId },
+    select: {
+      cashBalance: true,
+      bonusBalance: true,
+    },
+  });
+
+  if (!wallet) {
+    return payload;
+  }
+
+  const walletSnapshot = {
+    cashBalance: wallet.cashBalance,
+    bonusBalance: wallet.bonusBalance,
+    airtimeBalance: 0,
+  };
+
+  if (payload && typeof payload === "object") {
+    return {
+      ...(payload as Record<string, unknown>),
+      walletSnapshot,
+    };
+  }
+
+  return { walletSnapshot };
+}
+
 
 function parsePositiveDecimal(value: unknown): Prisma.Decimal | null {
   try {
@@ -101,7 +137,12 @@ export async function withdrawFromWallet(req: Request, res: Response) {
       error: null;
     };
 
-    return success(res, replaySafeResponse.data);
+    const responseDataWithWalletSnapshot = await ensureWalletSnapshotInResponseData(
+      replaySafeResponse.data,
+      userId
+    );
+
+    return success(res, responseDataWithWalletSnapshot);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to withdraw funds";
     await logError(err instanceof Error ? err : new Error(message), {

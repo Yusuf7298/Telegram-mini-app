@@ -1,22 +1,29 @@
 "use client";
-import { ArrowLeft, BellIcon, Trophy, Wallet } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { ArrowLeft, Trophy, Wallet } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Image from "next/image";
-import { useRouter } from 'next/navigation';
+import { useRouter } from "next/navigation";
+import { motion } from "framer-motion";
+import { AnimatedCounter } from "@/components/game/AnimatedCounter";
+import { BigWinBanner } from "@/components/game/BigWinBanner";
+import { DailyRewardCard } from "@/components/game/DailyRewardCard";
 import { ReferralCard } from "@/components/referral/ReferralCard";
-import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
-import { useToast } from '@/components/ui/ToastProvider';
+import { LoadingSpinner } from "@/components/ui/LoadingSpinner";
+import { useToast } from "@/components/ui/ToastProvider";
+import { vibrate } from "@/lib/haptics";
 import { BoxData, getBoxes, openBox, OpenBoxPayload } from "@/lib/boxApi";
+import {
+  claimDailyReward,
+  DailyRewardStatus,
+  getDailyRewardStatus,
+  getWinHistory,
+  WinHistoryEntry,
+} from "@/lib/rewardsApi";
+import { getTopWinners, TopWinner } from "@/lib/statsApi";
+import { WinHistoryTimeline } from "@/components/game/WinHistoryTimeline";
+import { useNotificationStore } from "@/store/notificationStore";
 import { useWalletStore } from "@/store/walletStore";
-
-const topWinners = [
-  { name: 'AJ', amount: '₦10,000', tone: 'from-[#ffb347] to-[#ff7a18]' },
-  { name: 'LK', amount: '₦10,000', tone: 'from-[#f9d423] to-[#f83600]' },
-  { name: 'MN', amount: '₦10,000', tone: 'from-[#ffd166] to-[#f77f00]' },
-  { name: 'BT', amount: '₦1,000', tone: 'from-[#5bc0be] to-[#1c7c54]' },
-  { name: 'OX', amount: '₦1,000', tone: 'from-[#ff7b7b] to-[#c44569]' },
-  { name: 'SM', amount: '₦1,000', tone: 'from-[#7f8cff] to-[#3f51b5]', muted: true },
-];
+import NotificationCenter from "@/components/notification/NotificationCenter";
 
 type PlayBox = {
   id: string;
@@ -31,7 +38,7 @@ type LastOpenAttempt = {
   payload: OpenBoxPayload;
 };
 
-function createIdempotencyKey() {
+function generateUUID() {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return crypto.randomUUID();
   }
@@ -54,113 +61,469 @@ function toSafeNumber(value: unknown): number {
   return 0;
 }
 
+function getOpenRequestErrorMessage(error: unknown): string {
+  if (typeof error === "object" && error !== null) {
+    const candidate = error as { status?: unknown; message?: unknown };
+
+    if (candidate.status === 409) {
+      return "Duplicate request";
+    }
+
+    if (candidate.status === 429) {
+      return "Too fast, wait";
+    }
+
+    if (candidate.status === 500) {
+      return "Try again";
+    }
+
+    if (typeof candidate.message === "string" && candidate.message.trim()) {
+      return candidate.message;
+    }
+  }
+
+  return "Try again";
+}
+
+function OpeningLabel() {
+  return (
+    <span className="inline-flex items-center gap-2">
+      <LoadingSpinner className="h-4 w-4" />
+      Opening...
+    </span>
+  );
+}
+const REWARD_REVEAL_MS = 650;
+const ANIMATION_ANTICIPATION_MS = 420;
+const ANIMATION_REVEAL_MS = 520;
+const ANIMATION_MIN_TOTAL_MS = 1700;
+type AnimationPhase = "idle" | "anticipation" | "spinning" | "reveal";
+const TOP_WINNERS_REFRESH_MS = 45_000;
+const TOP_WINNERS_LIMIT = 10;
+const WIN_HISTORY_LIMIT = 25;
+function getWinnerInitials(name: string) {
+  const trimmed = name.trim();
+  if (!trimmed) {
+    return "?";
+  }
+  const parts = trimmed.split(/\s+/).filter(Boolean);
+  if (parts.length === 1) {
+    return parts[0].slice(0, 2).toUpperCase();
+  }
+
+  return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
+}
+function getRankHighlight(rank: number) {
+  if (rank === 1) {
+    return "from-[#FFE7A6] via-[#F7C95E] to-[#C98C25]";
+  }
+
+  if (rank === 2) {
+    return "from-[#F1F4F8] via-[#CCD5E2] to-[#8893A3]";
+  }
+
+  if (rank === 3) {
+    return "from-[#FFD3A8] via-[#EFA66B] to-[#BA6D37]";
+  }
+
+  return "from-[#2A3655] via-[#1A2745] to-[#111B33]";
+}
+function wait(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function playSoundHook(type: "click" | "win" | "bigwin" | "daily") {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  // Optional sound hook for platform-level audio integration.
+  window.dispatchEvent(new CustomEvent("app:sound", { detail: { type } }));
+}
+
+function easeOutCubic(t: number) {
+  return 1 - Math.pow(1 - t, 3);
+}
+
 export default function PlayPage() {
   const [boxes, setBoxes] = useState<PlayBox[]>([]);
   const [boxesLoading, setBoxesLoading] = useState(true);
+  const [roundLoading, setRoundLoading] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [reward, setReward] = useState<number | null>(null);
   const [opening, setOpening] = useState<number | null>(null);
-  const [prize, setPrize] = useState<number | null>(null);
+  const [revealingBoxIndex, setRevealingBoxIndex] = useState<number | null>(null);
   const [showModal, setShowModal] = useState(false);
+  const [openedBoxesCount, setOpenedBoxesCount] = useState(0);
+  const [totalRewardValue, setTotalRewardValue] = useState(0);
   const [openError, setOpenError] = useState<string | null>(null);
   const [hasActionError, setHasActionError] = useState(false);
   const [retryingOpen, setRetryingOpen] = useState(false);
   const [lastOpenAttempt, setLastOpenAttempt] = useState<LastOpenAttempt | null>(null);
+  const [noBoxesAvailable, setNoBoxesAvailable] = useState(false);
+  const [animationPhase, setAnimationPhase] = useState<AnimationPhase>("idle");
+  const [animatedRewardValue, setAnimatedRewardValue] = useState(0);
+  const [topWinners, setTopWinners] = useState<TopWinner[]>([]);
+  const [topWinnersLoading, setTopWinnersLoading] = useState(true);
+  const [topWinnersError, setTopWinnersError] = useState<string | null>(null);
+  const [dailyStatus, setDailyStatus] = useState<DailyRewardStatus | null>(null);
+  const [dailyLoading, setDailyLoading] = useState(true);
+  const [dailyError, setDailyError] = useState<string | null>(null);
+  const [dailyClaiming, setDailyClaiming] = useState(false);
+  const [winHistory, setWinHistory] = useState<WinHistoryEntry[]>([]);
+  const [winHistoryLoading, setWinHistoryLoading] = useState(true);
+  const [bigWinThreshold, setBigWinThreshold] = useState<number | null>(null);
+  const [bigWinAmount, setBigWinAmount] = useState<number | null>(null);
   const { showToast } = useToast();
+  const addNotification = useNotificationStore((state) => state.addNotification);
   const fetchWallet = useWalletStore((state) => state.fetchWallet);
   const updateWalletFromResponse = useWalletStore((state) => state.updateWalletFromResponse);
   const cash = useWalletStore((state) => state.cashBalance);
   const bonus = useWalletStore((state) => state.bonusBalance);
   const router = useRouter();
-
   const totalWallet = useMemo(() => cash + bonus, [cash, bonus]);
+  const isAnimatingOpenSequence = loading || animationPhase !== "idle";
+
+  useEffect(() => {
+    if (!showModal || reward === null) {
+      return;
+    }
+    let frameId: number | null = null;
+    const durationMs = 1100;
+    const startedAt = performance.now();
+    const tick = (now: number) => {
+      const progress = Math.min((now - startedAt) / durationMs, 1);
+      const eased = easeOutCubic(progress);
+      setAnimatedRewardValue(Math.round(reward * eased));
+
+      if (progress < 1) {
+        frameId = window.requestAnimationFrame(tick);
+      }
+    };
+
+    setAnimatedRewardValue(0);
+    frameId = window.requestAnimationFrame(tick);
+
+    return () => {
+      if (frameId !== null) {
+        window.cancelAnimationFrame(frameId);
+      }
+    };
+  }, [showModal, reward]);
+
+  useEffect(() => {
+    if (bigWinAmount === null) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      setBigWinAmount(null);
+    }, 4200);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [bigWinAmount]);
+
+  const loadDailyStatus = useCallback(async (withLoadingState = false) => {
+    if (withLoadingState) {
+      setDailyLoading(true);
+    }
+
+    try {
+      const response = await getDailyRewardStatus();
+      setDailyStatus(response.data.data);
+      setDailyError(null);
+    } catch {
+      setDailyError("Failed to load daily reward status");
+      if (withLoadingState) {
+        setDailyStatus(null);
+      }
+    } finally {
+      if (withLoadingState) {
+        setDailyLoading(false);
+      }
+    }
+  }, []);
+
+  const loadWinHistory = useCallback(async (withLoadingState = false) => {
+    if (withLoadingState) {
+      setWinHistoryLoading(true);
+    }
+
+    try {
+      const response = await getWinHistory(WIN_HISTORY_LIMIT);
+      setWinHistory(response.data.data.timeline);
+      setBigWinThreshold(response.data.data.bigWinThreshold);
+    } catch {
+      if (withLoadingState) {
+        setWinHistory([]);
+      }
+      setBigWinThreshold(null);
+    } finally {
+      if (withLoadingState) {
+        setWinHistoryLoading(false);
+      }
+    }
+  }, []);
 
   useEffect(() => {
     const loadData = async () => {
       setBoxesLoading(true);
       setHasActionError(false);
+      setNoBoxesAvailable(false);
 
       try {
-        const [walletResult, boxesResult] = await Promise.all([fetchWallet(), getBoxes()]);
+        const [walletResult, boxesResult, _dailyStatus, _history] = await Promise.all([
+          fetchWallet(),
+          getBoxes(),
+          loadDailyStatus(true),
+          loadWinHistory(true),
+        ]);
         void walletResult;
+        void _dailyStatus;
+        void _history;
 
         const rawBoxes: BoxData[] = boxesResult.data.data;
-
         const mappedBoxes = rawBoxes.map((box, idx) => ({
           id: box.id,
           name: box.name,
           price: toSafeNumber(box.price),
           image: idx % 2 === 0 ? "/Boxes/box2.png" : "/Boxes/box3.png",
-          win: `Win up to ₦${(toSafeNumber(box.price) * 10).toLocaleString()}!`,
+          win: "Tap to open",
         }));
 
         setBoxes(mappedBoxes);
+        setNoBoxesAvailable(mappedBoxes.length === 0);
       } catch {
-        // API interceptor handles global error toast.
+        // Global API toast handles the failure.
       } finally {
         setBoxesLoading(false);
       }
     };
 
     void loadData();
-  }, [fetchWallet]);
+  }, [fetchWallet, loadDailyStatus, loadWinHistory]);
 
+  const loadTopWinners = useCallback(async (withLoadingState = false) => {
+    if (withLoadingState) {
+      setTopWinnersLoading(true);
+    }
+
+    try {
+      const response = await getTopWinners(TOP_WINNERS_LIMIT);
+      setTopWinners(response.data.data.winners);
+      setTopWinnersError(null);
+    } catch {
+      setTopWinnersError("Failed to load top winners");
+      if (withLoadingState) {
+        setTopWinners([]);
+      }
+    } finally {
+      if (withLoadingState) {
+        setTopWinnersLoading(false);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadTopWinners(true);
+
+    const intervalId = window.setInterval(() => {
+      void loadTopWinners(false);
+    }, TOP_WINNERS_REFRESH_MS);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [loadTopWinners]);
+
+  const handleClaimDailyReward = async () => {
+    if (dailyClaiming) {
+      return;
+    }
+
+    setDailyClaiming(true);
+    try {
+      playSoundHook("click");
+      vibrate(20);
+
+      const response = await claimDailyReward();
+      const payload = response.data.data;
+
+      const updated = updateWalletFromResponse(response.data);
+      if (!updated) {
+        await fetchWallet();
+      }
+
+      await Promise.all([loadDailyStatus(false), loadWinHistory(false)]);
+
+      showToast({ type: "success", message: `Daily reward claimed: ₦${payload.rewardAmount.toLocaleString()}` });
+      addNotification({
+        kind: "reward",
+        title: "Daily reward claimed",
+        message: `You claimed ₦${payload.rewardAmount.toLocaleString()} on streak day ${payload.streak}.`,
+      });
+
+      playSoundHook("daily");
+      vibrate([18, 35, 18]);
+    } catch {
+      showToast({ type: "error", message: "Daily reward unavailable" });
+      vibrate([10, 40, 10]);
+    } finally {
+      setDailyClaiming(false);
+    }
+  };
+
+  const reloadAvailableBoxes = async () => {
+    setRoundLoading(true);
+    setHasActionError(false);
+    setOpenError(null);
+
+    try {
+      const boxesResult = await getBoxes();
+      const rawBoxes: BoxData[] = boxesResult.data.data;
+      const mappedBoxes = rawBoxes.map((box, idx) => ({
+        id: box.id,
+        name: box.name,
+        price: toSafeNumber(box.price),
+        image: idx % 2 === 0 ? "/Boxes/box2.png" : "/Boxes/box3.png",
+        win: "Tap to open",
+      }));
+
+      setBoxes(mappedBoxes);
+      setNoBoxesAvailable(mappedBoxes.length === 0);
+      return mappedBoxes.length > 0;
+    } catch {
+      showToast({ type: "error", message: "Try again" });
+      return false;
+    } finally {
+      setRoundLoading(false);
+    }
+  };
 
   const handleClick = () => {
     router.back();
   };
 
   const executeOpenBox = async (attempt: LastOpenAttempt, isRetry = false) => {
-    if (opening !== null) {
+    if (isAnimatingOpenSequence) {
       return;
     }
 
+    setLoading(true);
     setOpening(attempt.boxIndex);
+    setAnimationPhase("anticipation");
     setRetryingOpen(isRetry);
     setHasActionError(false);
     setOpenError(null);
-    setPrize(null);
+    setReward(null);
+    setAnimatedRewardValue(0);
+
+    playSoundHook("click");
+    vibrate(12);
+
+    const sequenceStart = Date.now();
+    let openSucceeded = false;
+    const spinTimer = window.setTimeout(() => {
+      setAnimationPhase("spinning");
+    }, ANIMATION_ANTICIPATION_MS);
 
     try {
       const response = await openBox(attempt.payload);
       const payload = response.data.data;
-      const reward = toSafeNumber(payload.reward);
-      setPrize(reward);
-      showToast({ type: 'success', message: `Reward won: ₦${reward.toLocaleString()}` });
-      setShowModal(true);
-      const updated = updateWalletFromResponse(payload);
+      const nextReward = toSafeNumber(payload.reward);
+      const referralActivation = payload.referralActivation;
+
+      const elapsedMs = Date.now() - sequenceStart;
+      const remainingMs = Math.max(0, ANIMATION_MIN_TOTAL_MS - elapsedMs);
+      if (remainingMs > 0) {
+        await wait(remainingMs);
+      }
+
+      setReward(nextReward);
+      setOpenedBoxesCount((current) => current + 1);
+      setTotalRewardValue((current) => current + nextReward);
+      setAnimationPhase("reveal");
+      setRevealingBoxIndex(attempt.boxIndex);
+      playSoundHook("win");
+      vibrate([14, 28, 14]);
+      showToast({ type: "success", message: `You won ${nextReward.toLocaleString()} coins` });
+      addNotification({
+        kind: 'reward',
+        title: 'Reward received',
+        message: `You won ₦${nextReward.toLocaleString()} from your box opening.`,
+      });
+
+      if (referralActivation) {
+        const activationAmount = toSafeNumber(referralActivation.rewardAmount);
+        addNotification({
+          kind: 'referral',
+          title: 'Referral activated',
+          message: `Your referral is now active. You earned ₦${activationAmount.toLocaleString()}`,
+        });
+      }
+
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('referrals:refresh'));
+      }
+
+      const updated = updateWalletFromResponse(response.data);
       if (!updated) {
         await fetchWallet();
       }
+
+      await Promise.all([loadWinHistory(false), loadDailyStatus(false)]);
+
+      if (typeof bigWinThreshold === "number" && nextReward >= bigWinThreshold) {
+        setBigWinAmount(nextReward);
+        playSoundHook("bigwin");
+        vibrate([35, 65, 35, 65, 35]);
+      }
+
+      await wait(Math.max(ANIMATION_REVEAL_MS, REWARD_REVEAL_MS));
+      setShowModal(true);
+      openSucceeded = true;
     } catch (requestError) {
-      const message =
-        typeof requestError === 'object' && requestError !== null && 'message' in requestError
-          ? String((requestError as { message?: unknown }).message ?? 'Request failed. Please try again.')
-          : 'Request failed. Please try again.';
+      const message = getOpenRequestErrorMessage(requestError);
       setOpenError(message);
       setHasActionError(true);
+      showToast({ type: "error", message });
+      vibrate([10, 45, 10]);
+      setAnimationPhase("idle");
+      setRevealingBoxIndex(null);
     } finally {
+      window.clearTimeout(spinTimer);
+      setLoading(false);
       setOpening(null);
+      setAnimationPhase("idle");
+      if (!openSucceeded) {
+        setRevealingBoxIndex(null);
+      }
       setRetryingOpen(false);
     }
   };
 
-  const handleOpen = async (idx: number, boxId: string) => {
-    if (opening !== null) {
+  const handleOpen = async (boxIndex: number, boxId: string) => {
+    if (isAnimatingOpenSequence) {
       return;
     }
 
-    const payload: OpenBoxPayload = {
-      boxId,
-      idempotencyKey: createIdempotencyKey(),
-      timestamp: Date.now(),
+    const attempt: LastOpenAttempt = {
+      boxIndex,
+      payload: {
+        boxId,
+        idempotencyKey: generateUUID(),
+        timestamp: Date.now(),
+      },
     };
 
-    const attempt: LastOpenAttempt = { boxIndex: idx, payload };
     setLastOpenAttempt(attempt);
     await executeOpenBox(attempt);
   };
 
   const handleRetryLastOpen = async () => {
-    if (!lastOpenAttempt || opening !== null) {
+    if (!lastOpenAttempt || isAnimatingOpenSequence) {
       return;
     }
 
@@ -169,63 +532,111 @@ export default function PlayPage() {
 
   const handleOpenAnother = () => {
     setOpening(null);
-    setPrize(null);
+    setReward(null);
+    setAnimatedRewardValue(0);
     setShowModal(false);
+    setRevealingBoxIndex(null);
+    setAnimationPhase("idle");
+  };
+
+  const handleContinue = async () => {
+    handleOpenAnother();
+
+    const available = await reloadAvailableBoxes();
+    if (!available) {
+      setNoBoxesAvailable(true);
+      showToast({ type: "info", message: "No boxes available" });
+    }
   };
 
   return (
     <div className="min-h-telegram-screen safe-screen-padding overflow-x-hidden bg-gradient-to-b from-[#0A1837] to-[#1B2B4C] p-0">
+      <BigWinBanner amount={bigWinAmount} />
       <div className="mx-auto w-full max-w-md px-3 py-4 sm:px-4">
-        {/* Header */}
         <div className="flex items-center justify-between mb-6">
           <button onClick={handleClick} aria-label="Go back" className="flex h-11 w-11 items-center justify-center rounded-full bg-white/10 hover:bg-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/50">
             <ArrowLeft className="text-white" size={20} />
           </button>
           <div className="flex items-center gap-2 text-white font-bold font-Poppins text-[14px]">
-            ₦{totalWallet.toLocaleString()}
+            ₦<AnimatedCounter value={totalWallet} />
             <Wallet size={17} className="text-[#03DD8D]" />
           </div>
           <div className="flex items-center gap-2">
-            <button aria-label="Notifications" className="flex h-11 w-11 items-center justify-center rounded-full bg-white/10 hover:bg-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/50">
-              <BellIcon className="text-white" size={20} />
-            </button>
+            <NotificationCenter />
           </div>
         </div>
 
-        {/* Featured Booster Box */}
+        <div className="mb-4 grid grid-cols-2 gap-3">
+          <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+            <div className="text-[12px] font-semibold uppercase tracking-wide text-white/60">You opened</div>
+            <div className="mt-1 text-xl font-extrabold text-white"><AnimatedCounter value={openedBoxesCount} /> boxes</div>
+          </div>
+          <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+            <div className="text-[12px] font-semibold uppercase tracking-wide text-white/60">Total earned</div>
+            <div className="mt-1 text-xl font-extrabold text-[#1DE1B6]">₦<AnimatedCounter value={totalRewardValue} /></div>
+          </div>
+        </div>
+
+        {dailyLoading || dailyStatus || dailyError ? (
+          dailyLoading ? (
+            <div className="mb-4 h-32 animate-pulse rounded-2xl border border-white/10 bg-white/5" />
+          ) : dailyStatus ? (
+            <DailyRewardCard
+              streak={dailyStatus.streak}
+              nextStreak={dailyStatus.nextStreak}
+              nextRewardAmount={dailyStatus.nextRewardAmount}
+              canClaim={dailyStatus.canClaim}
+              claiming={dailyClaiming}
+              onClaim={handleClaimDailyReward}
+            />
+          ) : (
+            <div className="mb-4 rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-red-300">
+              {dailyError || "Daily reward data is unavailable"}
+            </div>
+          )
+        ) : null}
+
+        {noBoxesAvailable && (
+          <div className="mb-4 rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white/80">
+            No boxes available
+          </div>
+        )}
+
         <div className="p-5 flex flex-col items-start w-full mb-6 rounded-2xl bg-gradient-to-r from-yellow-400/30 to-pink-500/20 border border-white/10 shadow-lg">
           <div className="flex w-full justify-between items-start mb-2">
             <div className="flex items-center">
               <span className="flex items-center px-3 py-1 rounded-full border border-white/40 text-white text-[12px] font-Poppins mr-2">
                 <svg width="16" height="16" fill="none" viewBox="0 0 24 24" className="mr-1">
-                  <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/><path d="M12 8v4l3 3" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                  <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                  <path d="M12 8v4l3 3" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
                 Most Popular
               </span>
             </div>
             <div className="flex items-center bg-transparent rounded-lg px-3 py-1">
-              <svg width="16" height="16" fill="none" viewBox="0 0 24 24" className="mr-1"><circle cx="12" cy="12" r="10" stroke="#fff" strokeWidth="2"/><path d="M8 12h8M12 8v8" stroke="#fff" strokeWidth="2" strokeLinecap="round"/></svg>
-              <span className="text-white text-[12px] font-Poppins">₦5,000,000</span>
+              <svg width="16" height="16" fill="none" viewBox="0 0 24 24" className="mr-1"><circle cx="12" cy="12" r="10" stroke="#fff" strokeWidth="2" /><path d="M8 12h8M12 8v8" stroke="#fff" strokeWidth="2" strokeLinecap="round" /></svg>
+              <span className="text-white text-[12px] font-Poppins">₦{(boxes[0]?.price ?? 0).toLocaleString()}</span>
             </div>
           </div>
           <div className="flex w-full justify-center mb-2">
-            <img src="/Boxes/box1.png" alt="Booster Box" className="w-28 h-24 object-contain" />
+            <img src="/Boxes/box1.png" alt={boxes[0]?.name ?? "Featured box"} className="w-28 h-24 object-contain" />
           </div>
-          <div className="text-white font-bold text-[16px] font-Rubik mb-1">BOOSTER BOX</div>
+          <div className="text-white font-bold text-[16px] font-Rubik mb-1">{boxes[0]?.name ?? "Featured box"}</div>
           <div className="text-white/80 text-[12px] font-Poppins mb-4">Unlock rewards faster & win big airtime & cash prizes!</div>
           <button
-            className="mt-2 mb-3 min-h-[44px] w-full cursor-pointer rounded-lg border border-white/60 bg-transparent px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/50 disabled:opacity-60"
-            disabled={boxesLoading || opening !== null || boxes.length === 0}
+            className="mt-2 mb-3 min-h-[48px] w-full cursor-pointer rounded-lg border border-white/60 bg-transparent px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/50 disabled:opacity-60"
+            disabled={boxesLoading || isAnimatingOpenSequence || boxes.length === 0}
             onClick={() => {
               if (boxes[0]) {
                 void handleOpen(0, boxes[0].id);
               }
             }}
           >
-            {opening === 0 ? "Processing..." : `OPEN BOX - ₦${boxes[0]?.price ?? 0}`}
+            {isAnimatingOpenSequence && opening === 0 ? <OpeningLabel /> : boxes[0] ? `Open Box - ₦${boxes[0].price.toLocaleString()}` : "Open Box"}
           </button>
           <div className="flex items-center gap-2 text-white/80 text-[12px] font-Poppins mt-2">
-            <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke="#fff" strokeWidth="2"/><path d="M12 8v4l3 3" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
-            <span className="font-bold">POPULAR!</span> Opened 127 times today
+            <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke="#fff" strokeWidth="2" /><path d="M12 8v4l3 3" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
+            <span className="font-bold">POPULAR!</span> Live popularity updates from gameplay activity
           </div>
         </div>
 
@@ -238,25 +649,33 @@ export default function PlayPage() {
                 onClick={() => {
                   void handleRetryLastOpen();
                 }}
-                disabled={opening !== null}
+                disabled={loading}
               >
-                {retryingOpen ? 'Retrying...' : 'Retry'}
+                {retryingOpen ? "Retrying..." : "Retry"}
               </button>
             )}
           </div>
         )}
 
-        {opening !== null && (
+        {loading && (
           <div className="mb-4 flex items-center gap-2 rounded-xl border border-emerald-400/30 bg-emerald-500/10 p-3 text-sm text-emerald-200">
             <LoadingSpinner />
-            Processing request...
+            Opening...
           </div>
         )}
 
-        {/* Box Cards */}
-        <div className="grid grid-cols-1 gap-5">
+        {roundLoading && (
+          <div className="mb-4 rounded-xl border border-emerald-400/30 bg-emerald-500/10 p-3 text-sm text-emerald-200 transition-all duration-300 ease-out">
+            <div className="flex items-center gap-2">
+              <LoadingSpinner />
+              Loading next round...
+            </div>
+          </div>
+        )}
+
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-3 md:gap-4 xl:grid-cols-4">
           {boxesLoading && (
-            <div className="flex items-center gap-2 rounded-xl border border-white/20 bg-white/5 p-4 text-sm text-white/80">
+            <div className="col-span-full flex items-center gap-2 rounded-xl border border-white/20 bg-white/5 p-4 text-sm text-white/80">
               <LoadingSpinner />
               Loading boxes...
             </div>
@@ -265,182 +684,236 @@ export default function PlayPage() {
           {boxes.map((box, idx) => {
             if (idx === 0) {
               return (
-                <div
+                <button
                   key={box.id}
-                  className="relative rounded-2xl p-0 shadow-lg border border-[#fff2]/30 bg-gradient-to-br from-[#A32B5B] to-[#3B1B3F]"
-                  style={{ boxShadow: '0 2px 16px 0 rgba(163,43,91,0.18)' }}
+                  type="button"
+                  className={`relative aspect-square w-full overflow-hidden rounded-2xl border border-white/10 bg-[#0f1a2d] shadow-lg transition-all duration-200 ease-out transform-gpu disabled:opacity-60 md:hover:-translate-y-1 md:hover:shadow-[0_18px_40px_rgba(0,0,0,0.35)] md:hover:border-white/20 active:scale-[0.98] ${opening === idx || revealingBoxIndex === idx ? 'ring-2 ring-[#1DE1B6] shadow-[0_0_0_1px_rgba(29,225,182,0.35),0_0_32px_rgba(29,225,182,0.28)]' : ''} ${opening === idx && animationPhase === 'anticipation' ? 'box-anticipation' : ''} ${opening === idx && animationPhase === 'spinning' ? 'box-spinning' : ''}`}
+                  disabled={isAnimatingOpenSequence || boxesLoading || roundLoading}
+                  onClick={() => {
+                    void handleOpen(idx, box.id);
+                  }}
                 >
-                  <div className="flex flex-col items-start w-full">
-                    <div className="w-full flex justify-between items-start px-6 pt-6">
-                      <div></div>
-                      <div className="flex items-center gap-1 bg-white/10 rounded-full px-3 py-1">
-                        <span className="text-white/80 text-[12px] font-Poppins flex items-center gap-1">
-                          <svg width="18" height="18" fill="none" viewBox="0 0 24 24">
-                            <circle cx="12" cy="12" r="10" stroke="#fff" strokeWidth="2" />
-                            <text x="7" y="17" fontSize="12" fill="#fff">₦</text>
-                          </svg>
-                          ₦5,000,000
-                        </span>
+                  <div className="absolute inset-0 bg-gradient-to-br from-white/5 via-transparent to-black/20" />
+                  <div className="relative flex h-full w-full flex-col p-3 sm:p-4">
+                    <div className="mb-2 flex items-start justify-between gap-2">
+                      <div className="min-w-0 text-left">
+                        <div className="truncate text-sm font-extrabold uppercase tracking-wide text-white">{box.name}</div>
+                        <div className="mt-1 text-[11px] font-semibold text-emerald-300">₦{box.price}</div>
                       </div>
+                      <div className="shrink-0 rounded-full bg-white/10 px-2 py-1 text-[10px] font-semibold text-white/80">{idx + 1}</div>
                     </div>
-                    <div className="w-full flex justify-center items-center pt-2 pb-3">
-                      <Image src={box.image} alt={box.name} width={120} height={90} className="object-contain" />
+                    <div className="relative flex flex-1 items-center justify-center">
+                      <div className={`absolute inset-0 rounded-2xl bg-[radial-gradient(circle_at_center,rgba(29,225,182,0.22),transparent_65%)] transition-opacity duration-200 ${opening === idx || revealingBoxIndex === idx ? 'opacity-100' : 'opacity-0 md:group-hover:opacity-100'}`} />
+                      <Image src={box.image} alt={box.name} width={180} height={180} className={`relative max-h-[68%] w-auto object-contain transition-transform duration-200 ${loading && opening === idx ? 'scale-95' : 'md:group-hover:scale-105'}`} />
                     </div>
-                    <div className="px-6 pb-2 w-full">
-                      <div className="text-white font-extrabold text-[16px] font-Rubik mb-1">BIG CASH BOX</div>
-                      <div className="text-white/80 text-[12px] font-Poppins mb-5">Great value & odds of winning 100’s of prizes!</div>
-                      <button
-                        className="mb-3 min-h-[44px] w-full cursor-pointer rounded-lg border-2 border-white/80 bg-transparent px-4 py-3 font-Rubik text-sm font-semibold tracking-wider text-white transition hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60"
-                        style={{ letterSpacing: '0.04em' }}
-                        disabled={opening !== null || boxesLoading}
-                        onClick={() => {
-                          void handleOpen(idx, box.id);
-                        }}
-                      >
-                        {opening === idx ? 'Processing...' : `OPEN BOX - ₦${box.price}`}
-                      </button>
+                    <div className="mt-auto flex items-center justify-between gap-2 text-[11px] text-white/75">
+                      <span className="truncate">{box.win}</span>
+                      <span className="rounded-full bg-white/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide">Tap</span>
                     </div>
-                    {/* Prize Reveal Animation */}
-                    {opening === idx && prize !== null && (
-                      <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80 rounded-2xl animate-fade-in">
-                        <span className="text-yellow-300 text-2xl font-bold mb-2 animate-bounce">₦{prize}</span>
-                        <span className="text-white text-sm">You won!</span>
+                    {isAnimatingOpenSequence && opening === idx && (
+                      <div className="absolute inset-0 flex flex-col items-center justify-center rounded-2xl bg-black/70 backdrop-blur-sm">
+                        <OpeningLabel />
+                      </div>
+                    )}
+                    {revealingBoxIndex === idx && reward !== null && (
+                      <div className="absolute inset-0 flex flex-col items-center justify-center rounded-2xl bg-black/80 animate-fade-in">
+                        <div className="pointer-events-none absolute inset-0 box-explosion" />
+                        <span className="mb-2 text-2xl font-bold text-yellow-300 drop-shadow-[0_0_24px_rgba(255,223,0,0.7)]">₦{reward.toLocaleString()}</span>
+                        <span className="text-sm text-white">Reward unlocked</span>
                       </div>
                     )}
                   </div>
-                </div>
+                </button>
               );
             }
-            // Custom style for the second box (Mega)
+
             if (idx === 1) {
               return (
-                <div
+                <button
                   key={box.id}
-                  className="relative rounded-2xl p-0 shadow-lg border border-[#fff2]/30 bg-gradient-to-br from-[#B97B2E] to-[#6B4A1B]"
-                  style={{ boxShadow: '0 2px 16px 0 rgba(185,123,46,0.18)' }}
+                  type="button"
+                  className={`relative aspect-square w-full overflow-hidden rounded-2xl border border-white/10 bg-[#0f1a2d] shadow-lg transition-all duration-200 ease-out transform-gpu disabled:opacity-60 md:hover:-translate-y-1 md:hover:shadow-[0_18px_40px_rgba(0,0,0,0.35)] md:hover:border-white/20 active:scale-[0.98] ${opening === idx || revealingBoxIndex === idx ? 'ring-2 ring-[#1DE1B6] shadow-[0_0_0_1px_rgba(29,225,182,0.35),0_0_32px_rgba(29,225,182,0.28)]' : ''} ${opening === idx && animationPhase === 'anticipation' ? 'box-anticipation' : ''} ${opening === idx && animationPhase === 'spinning' ? 'box-spinning' : ''}`}
+                  disabled={isAnimatingOpenSequence || boxesLoading || roundLoading}
+                  onClick={() => {
+                    void handleOpen(idx, box.id);
+                  }}
                 >
-                  <div className="flex flex-col items-start w-full">
-                    <div className="w-full flex justify-between items-start px-6 pt-6">
-                      <div></div>
-                      <div className="flex items-center gap-1 bg-white/10 rounded-full px-3 py-1">
-                        <span className="text-white/80 text-[12px] font-Poppins flex items-center gap-1">
-                          <svg width="18" height="18" fill="none" viewBox="0 0 24 24">
-                            <circle cx="12" cy="12" r="10" stroke="#fff" strokeWidth="2" />
-                            <text x="7" y="17" fontSize="12" fill="#fff">₦</text>
-                          </svg>
-                          ₦5,000,000
-                        </span>
+                  <div className="absolute inset-0 bg-gradient-to-br from-white/5 via-transparent to-black/20" />
+                  <div className="relative flex h-full w-full flex-col p-3 sm:p-4">
+                    <div className="mb-2 flex items-start justify-between gap-2">
+                      <div className="min-w-0 text-left">
+                        <div className="truncate text-sm font-extrabold uppercase tracking-wide text-white">{box.name}</div>
+                        <div className="mt-1 text-[11px] font-semibold text-emerald-300">₦{box.price}</div>
                       </div>
+                      <div className="shrink-0 rounded-full bg-white/10 px-2 py-1 text-[10px] font-semibold text-white/80">{idx + 1}</div>
                     </div>
-                    <div className="w-full flex justify-center items-center pt-2 pb-3">
-                      <Image src={box.image} alt={box.name} width={120} height={90} className="object-contain" />
+                    <div className="relative flex flex-1 items-center justify-center">
+                      <div className={`absolute inset-0 rounded-2xl bg-[radial-gradient(circle_at_center,rgba(29,225,182,0.22),transparent_65%)] transition-opacity duration-200 ${opening === idx || revealingBoxIndex === idx ? 'opacity-100' : 'opacity-0 md:group-hover:opacity-100'}`} />
+                      <Image src={box.image} alt={box.name} width={180} height={180} className={`relative max-h-[68%] w-auto object-contain transition-transform duration-200 ${loading && opening === idx ? 'scale-95' : 'md:group-hover:scale-105'}`} />
                     </div>
-                    <div className="px-6 pb-2 w-full">
-                      <div className="text-white font-bold text-[16px] font-Rubik mb-1">MEGA BOX</div>
-                      <div className="text-white/80 text-[12px] font-Poppins mb-5">Go bigger with massive cash prizes to be won!</div>
-                      <button
-                        className="mb-3 min-h-[44px] w-full cursor-pointer rounded-lg border-2 border-white/80 bg-transparent px-4 py-3 font-Rubik text-sm font-semibold tracking-wider text-white transition hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60"
-                        style={{ letterSpacing: '0.04em' }}
-                        disabled={opening !== null || boxesLoading}
-                        onClick={() => {
-                          void handleOpen(idx, box.id);
-                        }}
-                      >
-                        {opening === idx ? 'Processing...' : `OPEN BOX - ₦${box.price}`}
-                      </button>
+                    <div className="mt-auto flex items-center justify-between gap-2 text-[11px] text-white/75">
+                      <span className="truncate">{box.win}</span>
+                      <span className="rounded-full bg-white/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide">Tap</span>
                     </div>
-                    {/* Prize Reveal Animation */}
-                    {opening === idx && prize !== null && (
-                      <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80 rounded-2xl animate-fade-in">
-                        <span className="text-yellow-300 text-2xl font-bold mb-2 animate-bounce">₦{prize}</span>
-                        <span className="text-white text-sm">You won!</span>
+                    {isAnimatingOpenSequence && opening === idx && (
+                      <div className="absolute inset-0 flex flex-col items-center justify-center rounded-2xl bg-black/70 backdrop-blur-sm">
+                        <OpeningLabel />
+                      </div>
+                    )}
+                    {revealingBoxIndex === idx && reward !== null && (
+                      <div className="absolute inset-0 flex flex-col items-center justify-center rounded-2xl bg-black/80 animate-fade-in">
+                        <div className="pointer-events-none absolute inset-0 box-explosion" />
+                        <span className="mb-2 text-2xl font-bold text-yellow-300 drop-shadow-[0_0_24px_rgba(255,223,0,0.7)]">₦{reward.toLocaleString()}</span>
+                        <span className="text-sm text-white">Reward unlocked</span>
                       </div>
                     )}
                   </div>
-                </div>
+                </button>
               );
             }
-            // Default style for other boxes
+
             return (
               <div
                 key={box.id}
-                className="relative bg-gradient-to-br from-blue-900/60 to-green-800/40 rounded-2xl p-5 shadow-lg border border-white/10"
+                className={`relative aspect-square w-full overflow-hidden rounded-2xl border border-white/10 bg-[#0f1a2d] shadow-lg transition-all duration-200 ease-out transform-gpu disabled:opacity-60 md:hover:-translate-y-1 md:hover:shadow-[0_18px_40px_rgba(0,0,0,0.35)] md:hover:border-white/20 active:scale-[0.98] ${opening === idx || revealingBoxIndex === idx ? 'ring-2 ring-[#1DE1B6] shadow-[0_0_0_1px_rgba(29,225,182,0.35),0_0_32px_rgba(29,225,182,0.28)]' : ''}`}
               >
-                <div className="flex flex-col items-center">
-                  <div className="mb-2">
+                <button
+                  type="button"
+                  className="group flex h-full w-full flex-col rounded-2xl text-left"
+                  disabled={isAnimatingOpenSequence || boxesLoading || roundLoading}
+                  onClick={() => {
+                    void handleOpen(idx, box.id);
+                  }}
+                >
+                  <div className="absolute inset-0 bg-gradient-to-br from-white/5 via-transparent to-black/20" />
+                  <div className="relative flex h-full flex-col p-3 sm:p-4">
+                    <div className="mb-2 flex items-start justify-between gap-2">
+                      <div className="min-w-0 text-left">
+                        <div className="truncate text-sm font-extrabold uppercase tracking-wide text-white">{box.name}</div>
+                        <div className="mt-1 text-[11px] font-semibold text-emerald-300">₦{box.price}</div>
+                      </div>
+                      <div className="shrink-0 rounded-full bg-white/10 px-2 py-1 text-[10px] font-semibold text-white/80">{idx + 1}</div>
+                    </div>
+                    <div className="relative flex flex-1 items-center justify-center">
+                      <div className={`absolute inset-0 rounded-2xl bg-[radial-gradient(circle_at_center,rgba(29,225,182,0.22),transparent_65%)] transition-opacity duration-200 ${opening === idx || revealingBoxIndex === idx ? 'opacity-100' : 'opacity-0 md:group-hover:opacity-100'}`} />
                     <Image
                       src={box.image}
                       alt={box.name}
-                      width={90}
-                      height={90}
-                      className={`transition-transform duration-700 ${opening === idx ? 'animate-bounce scale-110' : ''}`}
+                      width={140}
+                      height={140}
+                      className={`relative max-h-[68%] w-auto object-contain transition-transform duration-200 ${loading && opening === idx ? 'scale-95' : 'md:group-hover:scale-105'}`}
                     />
-                  </div>
-                  <div className="text-white font-bold text-lg mb-1">{box.name}</div>
-                  <div className="text-green-400 font-bold text-xl mb-1">₦{box.price}</div>
-                  <div className="text-gray-300 text-sm mb-3">{box.win}</div>
-                  <button
-                    className="mt-2 min-h-[44px] w-full rounded-lg bg-gradient-to-r from-blue-600 to-green-500 px-4 py-2 text-base font-bold text-white transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 disabled:cursor-not-allowed disabled:opacity-60"
-                    disabled={opening !== null || boxesLoading}
-                    onClick={() => {
-                      void handleOpen(idx, box.id);
-                    }}
-                  >
-                    {opening === idx ? 'Processing...' : 'Open Box'}
-                  </button>
-                  {/* Prize Reveal Animation */}
-                  {opening === idx && prize !== null && (
-                    <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80 rounded-2xl animate-fade-in">
-                      <span className="text-yellow-300 text-2xl font-bold mb-2 animate-bounce">₦{prize}</span>
-                      <span className="text-white text-sm">You won!</span>
                     </div>
-                  )}
-                </div>
+                    <div className="mt-auto flex items-center justify-between gap-2 text-[11px] text-white/75">
+                      <span className="truncate">{box.win}</span>
+                      <span className="rounded-full bg-white/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide">Tap</span>
+                    </div>
+                    {isAnimatingOpenSequence && opening === idx && (
+                      <div className="absolute inset-0 flex flex-col items-center justify-center rounded-2xl bg-black/70 backdrop-blur-sm">
+                        <OpeningLabel />
+                      </div>
+                    )}
+                    {revealingBoxIndex === idx && reward !== null && (
+                      <div className="absolute inset-0 flex flex-col items-center justify-center rounded-2xl bg-black/80 animate-fade-in">
+                        <div className="pointer-events-none absolute inset-0 box-explosion" />
+                        <span className="mb-2 text-2xl font-bold text-yellow-300 drop-shadow-[0_0_24px_rgba(255,223,0,0.7)]">₦{reward.toLocaleString()}</span>
+                        <span className="text-sm text-white">Reward unlocked</span>
+                      </div>
+                    )}
+                  </div>
+                </button>
               </div>
             );
           })}
         </div>
 
-        {/* Top Winners Today */}
         <div className="mt-6 mb-6">
           <div className="mb-4 flex items-center gap-2 text-white">
             <Trophy className="h-7 w-7 text-[#1DE1B6]" fill="currentColor" />
             <span className="font-bold text-lg sm:text-[20px] font-Rubik tracking-[-0.03em]">TOP WINNERS TODAY</span>
           </div>
 
-          <div className="grid grid-cols-3 gap-3 pb-2 sm:grid-cols-6">
-            {topWinners.map((winner, idx) => (
-              <div key={`${winner.name}-${idx}`} className="flex min-w-0 flex-col items-center">
-                <div className={`h-14 w-14 rounded-full bg-gradient-to-br ${winner.tone} p-[3px] shadow-[0_8px_24px_rgba(0,0,0,0.35)] ${winner.muted ? 'opacity-30' : ''}`}>
-                  <div className="grid h-full w-full place-items-center rounded-full bg-[#09111f] text-[18px] font-black text-white">
-                    {winner.name}
+          {topWinnersLoading ? (
+            <div className="space-y-2">
+              {Array.from({ length: 5 }).map((_, idx) => (
+                <div
+                  key={`winner-skeleton-${idx}`}
+                  className="h-16 animate-pulse rounded-2xl border border-white/10 bg-white/5"
+                />
+              ))}
+            </div>
+          ) : topWinnersError ? (
+            <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-5 text-center text-sm font-semibold text-red-300">
+              {topWinnersError}
+            </div>
+          ) : topWinners.length === 0 ? (
+            <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-5 text-center text-sm font-semibold text-white/70">
+              No winners yet
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {topWinners.slice(0, TOP_WINNERS_LIMIT).map((winner, idx) => {
+                const rank = idx + 1;
+                const rankHighlight = getRankHighlight(rank);
+
+                return (
+                  <div
+                    key={winner.userId}
+                    className={`flex items-center gap-3 rounded-2xl border p-2.5 ${rank <= 3 ? "border-white/30 bg-white/10" : "border-white/10 bg-white/[0.04]"}`}
+                  >
+                    <div className={`grid h-7 w-7 place-items-center rounded-full bg-gradient-to-br ${rankHighlight} text-xs font-black text-[#101b2a]`}>
+                      {rank}
+                    </div>
+
+                    <div className={`h-11 w-11 overflow-hidden rounded-full bg-gradient-to-br p-[2px] ${rank <= 3 ? rankHighlight : "from-[#4A5B84] to-[#27375E]"}`}>
+                      <div className="grid h-full w-full place-items-center rounded-full bg-[#09111f] text-sm font-extrabold text-white">
+                        {getWinnerInitials(winner.username)}
+                      </div>
+                    </div>
+
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm font-semibold text-white">{winner.username}</div>
+                    </div>
+
+                    <div className="text-right">
+                      <div className="text-sm font-extrabold text-[#1DE1B6]">₦{Math.max(0, winner.totalEarnings).toLocaleString()}</div>
+                    </div>
                   </div>
-                </div>
-                <div className={`mt-2 text-center text-[12px] font-Poppins text-white ${winner.muted ? 'opacity-40' : ''}`}>
-                  {winner.amount}
-                </div>
-              </div>
-            ))}
-          </div>
+                );
+              })}
+            </div>
+          )}
         </div>
 
-        {/* Invite Friends */}
         <ReferralCard />
 
-        {/* Win Modal */}
+        <WinHistoryTimeline entries={winHistory} loading={winHistoryLoading} />
+
         {showModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-            <div className="max-h-[85dvh] w-[min(22rem,92vw)] overflow-y-auto rounded-2xl bg-[#101B2A] p-6 sm:p-8 flex flex-col items-center shadow-xl">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.94, y: 18 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              transition={{ duration: 0.38, ease: [0.22, 0.61, 0.36, 1] }}
+              className="relative max-h-[85dvh] w-[min(22rem,92vw)] overflow-y-auto rounded-2xl bg-[#101B2A] p-6 sm:p-8 flex flex-col items-center shadow-xl"
+            >
+              <div className="pointer-events-none absolute inset-0 modal-win-glow" />
+              <div className="pointer-events-none absolute inset-0 modal-confetti" />
               <Image src="/trophy.png" alt="Trophy" width={60} height={60} className="mb-3" />
               <div className="mb-2 text-center text-xl font-bold text-green-400 sm:text-2xl">Congratulations!</div>
-              <div className="mb-4 text-center text-base text-white sm:text-lg">You won <span className="font-bold text-yellow-300">₦{prize}</span></div>
+              <div className="mb-4 text-center text-base text-white sm:text-lg">
+                You won <span className="font-bold text-yellow-300">₦{animatedRewardValue.toLocaleString()}</span>
+              </div>
               <button
-                className="mt-2 min-h-[44px] w-full rounded-lg bg-gradient-to-r from-blue-600 to-green-500 px-4 py-3 text-base font-bold text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300"
-                onClick={handleOpenAnother}
+                className="mt-2 min-h-[44px] w-full rounded-lg bg-gradient-to-r from-blue-600 to-green-500 px-4 py-3 text-base font-bold text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 disabled:cursor-not-allowed disabled:opacity-60"
+                onClick={() => {
+                  void handleContinue();
+                }}
+                disabled={roundLoading}
               >
-                Open Another Box
+                {roundLoading ? "Loading next round..." : "Continue"}
               </button>
-            </div>
+            </motion.div>
           </div>
         )}
       </div>

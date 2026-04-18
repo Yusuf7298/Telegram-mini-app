@@ -1,12 +1,12 @@
 "use client";
 import { useEffect, useMemo } from 'react';
-import { BellIcon } from '@heroicons/react/24/outline';
 import { ArrowLeftRight } from 'lucide-react';
 import { ArrowLeft } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { useToast } from '@/components/ui/ToastProvider';
 import { WALLET_REFRESH_EVENT, useWalletStore } from '@/store/walletStore';
+import NotificationCenter from '@/components/notification/NotificationCenter';
 
 function formatDate(value: string) {
   const date = new Date(value);
@@ -35,7 +35,6 @@ export default function WalletPage() {
           <td className="px-4 py-3 text-sm font-Poppins">{formatDate(tx.createdAt)}</td>
           <td className="px-4 py-3 text-sm font-Poppins">{tx.type}</td>
           <td className="px-4 py-3 text-sm font-Poppins">₦{tx.amount.toLocaleString()}</td>
-          <td className="px-4 py-3 text-sm font-Poppins">Complete</td>
         </tr>
       )),
     [transactions]
@@ -50,7 +49,6 @@ export default function WalletPage() {
             <span className="font-semibold text-emerald-300">₦{tx.amount.toLocaleString()}</span>
           </div>
           <div className="mt-1 text-xs text-white/60">{formatDate(tx.createdAt)}</div>
-          <div className="mt-1 text-xs text-white/70">Status: Complete</div>
         </div>
       )),
     [transactions]
@@ -100,9 +98,7 @@ export default function WalletPage() {
           <ArrowLeft className="h-6 w-6" />
         </button>
         <div className="text-base font-bold text-white">Wallet</div>
-        <button aria-label="Notifications" className="flex h-11 w-11 items-center justify-center rounded-full bg-white/10 text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/50">
-          <BellIcon className="h-7 w-7 text-current m-2" />
-        </button>
+        <NotificationCenter />
       </div>
 
       {/* Balance Section */}
@@ -123,7 +119,7 @@ export default function WalletPage() {
               </span>
               <span className="text-sm font-semibold text-white">Cash</span>
             </div>
-            <div className="text-base font-bold text-white sm:text-lg">₦{cash}</div>
+            <div className="text-base font-bold text-white sm:text-lg">₦{cash.toLocaleString()}</div>
           </div>
           <div className="flex min-w-0 flex-col items-center rounded-xl border border-white/10 bg-[#1a2533] p-3">
             <div className="flex items-center gap-2 mb-1">
@@ -141,7 +137,7 @@ export default function WalletPage() {
               </span>
               <span className="text-sm font-semibold text-white">Bonus</span>
             </div>
-            <div className="text-base font-bold text-white sm:text-lg">₦{bonus}</div>
+            <div className="text-base font-bold text-white sm:text-lg">₦{bonus.toLocaleString()}</div>
           </div>
         </div>
       </div>
@@ -158,7 +154,6 @@ export default function WalletPage() {
           <ArrowLeftRight className="h-5 w-5 text-[#00FFB2] -ml-2" strokeWidth={3} />
           <span className="leading-none text-lg font-extrabold uppercase tracking-tight text-white sm:text-xl">Recent Transaction</span>
         </div>
-        <div className="mb-2 text-sm text-white/60">Exclusive Reward for the Weekly Leaderboard Winner</div>
         <div className="rounded-2xl bg-[#16263a] border border-white/10">
           <table className="hidden w-full table-auto text-white/80 text-sm sm:table">
             <thead className="mb-2 mt-2">
@@ -166,7 +161,6 @@ export default function WalletPage() {
                 <th className="py-3 px-4 text-left text-sm font-medium">Date</th>
                 <th className="py-3 px-4 text-left text-sm font-medium">Via</th>
                 <th className="py-3 px-4 text-left text-sm font-medium">Amount</th>
-                <th className="py-3 px-4 text-left text-sm font-medium">Status</th>
               </tr>
             </thead>
             <tbody>
@@ -181,7 +175,7 @@ export default function WalletPage() {
                 ))
               ) : transactions.length === 0 ? (
                 <tr>
-                  <td className="px-4 py-4 text-sm text-white/60" colSpan={4}>
+                  <td className="px-4 py-4 text-sm text-white/60" colSpan={3}>
                     No transactions yet.
                   </td>
                 </tr>

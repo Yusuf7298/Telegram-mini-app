@@ -14,6 +14,36 @@ const logger_1 = require("../../services/logger");
 function getRequestUserId(req) {
     return req.userId;
 }
+async function ensureWalletSnapshotInResponseData(payload, userId) {
+    if (payload && typeof payload === "object") {
+        const data = payload;
+        if (data.walletSnapshot && typeof data.walletSnapshot === "object") {
+            return payload;
+        }
+    }
+    const wallet = await db_1.prisma.wallet.findUnique({
+        where: { userId },
+        select: {
+            cashBalance: true,
+            bonusBalance: true,
+        },
+    });
+    if (!wallet) {
+        return payload;
+    }
+    const walletSnapshot = {
+        cashBalance: wallet.cashBalance,
+        bonusBalance: wallet.bonusBalance,
+        airtimeBalance: 0,
+    };
+    if (payload && typeof payload === "object") {
+        return {
+            ...payload,
+            walletSnapshot,
+        };
+    }
+    return { walletSnapshot };
+}
 function parsePositiveDecimal(value) {
     try {
         const normalized = typeof value === "number" || typeof value === "string"
@@ -84,7 +114,8 @@ async function withdrawFromWallet(req, res) {
             return (0, responder_1.failure)(res, "INVALID_INPUT", "idempotencyKey is required");
         }
         const replaySafeResponse = await (0, wallet_service_1.withdrawWallet)(userId, amount, idempotencyKey);
-        return (0, responder_1.success)(res, replaySafeResponse.data);
+        const responseDataWithWalletSnapshot = await ensureWalletSnapshotInResponseData(replaySafeResponse.data, userId);
+        return (0, responder_1.success)(res, responseDataWithWalletSnapshot);
     }
     catch (err) {
         const message = err instanceof Error ? err.message : "Failed to withdraw funds";

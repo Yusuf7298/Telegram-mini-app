@@ -1,12 +1,13 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, Wallet, Smartphone, BellIcon } from "lucide-react";
+import { ArrowLeft, Wallet, Smartphone } from "lucide-react";
 import { useRouter } from "next/navigation";
 import api from "@/lib/api";
 import { ApiResponse } from '@/lib/apiTypes';
 import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
 import { useToast } from '@/components/ui/ToastProvider';
 import { useWalletStore, WALLET_REFRESH_EVENT } from "@/store/walletStore";
+import NotificationCenter from '@/components/notification/NotificationCenter';
 
 type WithdrawData = {
   cashBalance?: number | string;
@@ -77,8 +78,7 @@ export default function WithdrawPage() {
         idempotencyKey: attempt.idempotencyKey,
       });
 
-      const payload = response.data.data;
-      const updated = updateWalletFromResponse(payload);
+      const updated = updateWalletFromResponse(response.data);
       if (!updated) {
         await fetchWallet();
       }
@@ -111,8 +111,8 @@ export default function WithdrawPage() {
 
     const cleanedAmount = amount.trim();
     const amt = Number(cleanedAmount);
-    if (!cleanedAmount || Number.isNaN(amt) || amt < 100) {
-      showToast({ type: 'info', message: 'Enter a valid amount (min ₦100)' });
+    if (!cleanedAmount || Number.isNaN(amt) || amt <= 0) {
+      showToast({ type: 'info', message: 'Enter a valid amount' });
       return;
     }
 
@@ -157,9 +157,7 @@ export default function WithdrawPage() {
           <ArrowLeft className="h-6 w-6" />
         </button>
         <div className="text-base font-bold text-white">Withdraw</div>
-        <button aria-label="Notifications" className="flex h-11 w-11 items-center justify-center rounded-full bg-white/10 text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/50">
-          <BellIcon className="h-7 w-7 text-current m-2" />
-        </button>
+        <NotificationCenter />
       </div>
 
         <form className="flex flex-1 flex-col px-4 pt-10" onSubmit={handleSubmit}>
@@ -209,7 +207,7 @@ export default function WithdrawPage() {
               <input
                 className={amountFieldClass}
                 name="amount"
-                placeholder="₦500"
+                placeholder="Amount"
                 value={amount}
                 onChange={(e) => setAmount(e.target.value)}
                 inputMode="numeric"

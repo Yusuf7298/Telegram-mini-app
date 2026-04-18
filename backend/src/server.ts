@@ -8,7 +8,11 @@ import vaultRoutes from "./modules/vault/vault.routes";
 import authRoutes from "./modules/auth/auth.routes";
 import adminRoutes from "./modules/admin/admin.routes";
 import referralRoutes from "./modules/referral/referral.routes";
+import statsRoutes from "./modules/stats/stats.routes";
+import rewardsRoutes from "./modules/rewards/rewards.routes";
+import configRoutes from "./modules/config/config.routes";
 import { authMiddleware } from "./middleware/auth.middleware";
+import { assertGameConfigOnStartup } from "./services/gameConfig.service";
 
 
 const app = express();
@@ -88,6 +92,9 @@ app.use("/api/wallet", authMiddleware, walletRoutes);
 app.use("/api/game", gameRoutes);
 app.use("/api/vault", authMiddleware, vaultRoutes);
 app.use("/api/referral", referralRoutes);
+app.use("/api/config", configRoutes);
+app.use("/api/stats", statsRoutes);
+app.use("/api/rewards", authMiddleware, rewardsRoutes);
 
 app.get("/test", async (req, res) => {
   res.send("Working ✅");
@@ -114,9 +121,20 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
 
 const port = Number(env.PORT) || 5000;
 
-if (env.VERCEL !== "1") {
-  app.listen(port, () => {
-    console.info(`Server running on port ${port}`);
+async function startServer() {
+  await assertGameConfigOnStartup();
+
+  if (env.VERCEL !== "1") {
+    app.listen(port, () => {
+      console.info(`Server running on port ${port}`);
+    });
+  }
+}
+
+if (env.NODE_ENV !== "test") {
+  void startServer().catch((error) => {
+    console.error("Startup validation failed:", error);
+    process.exit(1);
   });
 }
 

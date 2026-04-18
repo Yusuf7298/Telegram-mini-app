@@ -13,7 +13,11 @@ const vault_routes_1 = __importDefault(require("./modules/vault/vault.routes"));
 const auth_routes_1 = __importDefault(require("./modules/auth/auth.routes"));
 const admin_routes_1 = __importDefault(require("./modules/admin/admin.routes"));
 const referral_routes_1 = __importDefault(require("./modules/referral/referral.routes"));
+const stats_routes_1 = __importDefault(require("./modules/stats/stats.routes"));
+const rewards_routes_1 = __importDefault(require("./modules/rewards/rewards.routes"));
+const config_routes_1 = __importDefault(require("./modules/config/config.routes"));
 const auth_middleware_1 = require("./middleware/auth.middleware");
+const gameConfig_service_1 = require("./services/gameConfig.service");
 const app = (0, express_1.default)();
 const isProduction = env_1.env.NODE_ENV === "production";
 if (isProduction) {
@@ -74,6 +78,9 @@ app.use("/api/wallet", auth_middleware_1.authMiddleware, wallet_routes_1.default
 app.use("/api/game", game_routes_1.default);
 app.use("/api/vault", auth_middleware_1.authMiddleware, vault_routes_1.default);
 app.use("/api/referral", referral_routes_1.default);
+app.use("/api/config", config_routes_1.default);
+app.use("/api/stats", stats_routes_1.default);
+app.use("/api/rewards", auth_middleware_1.authMiddleware, rewards_routes_1.default);
 app.get("/test", async (req, res) => {
     res.send("Working ✅");
 });
@@ -92,9 +99,18 @@ app.use((err, _req, res, _next) => {
     });
 });
 const port = Number(env_1.env.PORT) || 5000;
-if (env_1.env.VERCEL !== "1") {
-    app.listen(port, () => {
-        console.info(`Server running on port ${port}`);
+async function startServer() {
+    await (0, gameConfig_service_1.assertGameConfigOnStartup)();
+    if (env_1.env.VERCEL !== "1") {
+        app.listen(port, () => {
+            console.info(`Server running on port ${port}`);
+        });
+    }
+}
+if (env_1.env.NODE_ENV !== "test") {
+    void startServer().catch((error) => {
+        console.error("Startup validation failed:", error);
+        process.exit(1);
     });
 }
 exports.default = app;

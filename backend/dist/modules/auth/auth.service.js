@@ -8,9 +8,8 @@ exports.generateToken = generateToken;
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const env_1 = require("../../config/env");
 const db_1 = require("../../config/db");
-const crypto_1 = require("crypto");
-const crypto_2 = __importDefault(require("crypto"));
-const WAITLIST_BONUS_AMOUNT = 1000;
+const crypto_1 = __importDefault(require("crypto"));
+const user_service_1 = require("../user/user.service");
 function parseTelegramUser(initData) {
     const params = new URLSearchParams(initData);
     const userRaw = params.get("user");
@@ -25,7 +24,7 @@ function parseTelegramUser(initData) {
 }
 function computeDeviceHash(params) {
     const raw = [params.deviceId || "", params.userAgent || "", params.ip || ""].join("|");
-    return crypto_2.default.createHash("sha256").update(raw).digest("hex");
+    return crypto_1.default.createHash("sha256").update(raw).digest("hex");
 }
 async function logSuspiciousDeviceBehavior(userId, action, details) {
     await db_1.prisma.suspiciousActionLog.create({
@@ -38,9 +37,18 @@ async function logSuspiciousDeviceBehavior(userId, action, details) {
 }
 async function authWithTelegram(initData, context) {
     const userData = parseTelegramUser(initData);
-    const platformId = String(userData.id);
+    const telegramId = String(userData.id);
     const username = typeof userData.username === "string" && userData.username.trim()
         ? userData.username
+        : null;
+    const firstName = typeof userData.first_name === "string" && userData.first_name.trim()
+        ? userData.first_name.trim()
+        : null;
+    const lastName = typeof userData.last_name === "string" && userData.last_name.trim()
+        ? userData.last_name.trim()
+        : null;
+    const profilePhotoUrl = typeof userData.photo_url === "string" && userData.photo_url.trim()
+        ? userData.photo_url.trim()
         : null;
     const normalizedIp = context?.ip || "unknown";
     const normalizedDeviceId = context?.deviceId?.trim() || undefined;
@@ -49,34 +57,32 @@ async function authWithTelegram(initData, context) {
         userAgent: context?.userAgent,
         ip: normalizedIp,
     });
-    const referralCode = `REF-${(0, crypto_1.randomUUID)().replace(/-/g, "").slice(0, 12)}`;
-    const user = await db_1.prisma.user.upsert({
-        where: { platformId },
-        create: {
-            platformId,
-            username,
-            referralCode,
+    const existingUser = await db_1.prisma.user.findUnique({
+        where: { telegramId },
+    });
+    const user = existingUser
+        ? await db_1.prisma.user.update({
+            where: { telegramId },
+            data: {
+                username,
+                firstName,
+                lastName,
+                profilePhotoUrl,
+                platformId: telegramId,
+                deviceHash,
+                lastLoginIp: normalizedIp,
+                ...(normalizedDeviceId ? { signupDeviceId: normalizedDeviceId } : {}),
+            },
+        })
+        : await (0, user_service_1.createUser)(telegramId, username, {
+            firstName,
+            lastName,
+            profilePhotoUrl,
             signupDeviceId: normalizedDeviceId,
             deviceHash,
             createdIp: normalizedIp,
             lastLoginIp: normalizedIp,
-            waitlistBonusGranted: true,
-            waitlistBonusUnlocked: false,
-            totalPlaysCount: 0,
-            wallet: {
-                create: {
-                    bonusBalance: WAITLIST_BONUS_AMOUNT,
-                    bonusLocked: true,
-                },
-            },
-        },
-        update: {
-            username,
-            deviceHash,
-            lastLoginIp: normalizedIp,
-            ...(normalizedDeviceId ? { signupDeviceId: normalizedDeviceId } : {}),
-        },
-    });
+        });
     const [sameDeviceAccounts, recentDeviceSwitches] = await Promise.all([
         db_1.prisma.user.count({
             where: {
@@ -116,10 +122,10 @@ async function authWithTelegram(initData, context) {
     }
     return user;
 }
-function generateToken(userId) {
+function generateToken(userId, role) {
     const secret = env_1.env.JWT_SECRET;
     if (!secret) {
         throw new Error("JWT_SECRET is not set");
     }
-    return jsonwebtoken_1.default.sign({ userId }, secret, { expiresIn: "7d" });
+    return jsonwebtoken_1.default.sign({ userId, role }, secret, { expiresIn: "7d" });
 }

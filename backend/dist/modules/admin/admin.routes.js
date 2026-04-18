@@ -7,6 +7,11 @@ const validate_1 = require("../../middleware/validate");
 const admin_validator_1 = require("../../validators/admin.validator");
 const router = (0, express_1.Router)();
 router.get('/admin/metrics', adminAuth_1.requireAdminAuth, admin_controller_1.getMetrics);
+router.get('/admin/list', adminAuth_1.requireAdminAuth, admin_controller_1.listAdmins);
+router.get('/admin/config', adminAuth_1.requireAdminAuth, admin_controller_1.getAdminConfig);
+router.get('/admin/game-config', adminAuth_1.requireAdminAuth, admin_controller_1.getGameRewardsConfig);
+router.post('/admin/create-admin', adminAuth_1.requireAdminAuth, adminAuth_1.requireSuperAdmin, (0, validate_1.validateBody)(admin_validator_1.adminCreateRemoveSchema), admin_controller_1.createAdmin);
+router.delete('/admin/remove-admin', adminAuth_1.requireAdminAuth, adminAuth_1.requireSuperAdmin, (0, validate_1.validateBody)(admin_validator_1.adminCreateRemoveSchema), admin_controller_1.removeAdmin);
 router.post('/admin/rewards', adminAuth_1.requireAdminAuth, (0, validate_1.validateBody)(admin_validator_1.adminRewardSchema), admin_controller_1.createReward);
 router.put('/admin/rewards/:id', adminAuth_1.requireAdminAuth, (0, validate_1.validateBody)(admin_validator_1.adminRewardSchema), admin_controller_1.updateReward);
 router.delete('/admin/rewards/:id', adminAuth_1.requireAdminAuth, admin_controller_1.deleteReward);
@@ -22,6 +27,10 @@ router.get('/admin/db-integrity', adminAuth_1.requireAdminAuth, admin_controller
 router.get('/admin/runtime-check', adminAuth_1.requireAdminAuth, admin_controller_1.runtimeCheckHandler);
 router.get('/admin/fraud-events', adminAuth_1.requireAdminAuth, admin_controller_1.getFraudEventsHandler);
 router.get('/admin/high-risk-users', adminAuth_1.requireAdminAuth, admin_controller_1.getHighRiskUsersHandler);
+router.post('/admin/referral-bonus', adminAuth_1.requireAdminAuth, (0, validate_1.validateBody)(admin_validator_1.adminReferralBonusSchema), admin_controller_1.updateReferralBonus);
+router.patch('/admin/config', adminAuth_1.requireAdminAuth, (0, validate_1.validateBody)(admin_validator_1.adminGameRewardsConfigSchema), admin_controller_1.patchAdminConfig);
+router.put('/admin/game-config', adminAuth_1.requireAdminAuth, (0, validate_1.validateBody)(admin_validator_1.adminGameRewardsConfigSchema), admin_controller_1.updateGameRewardsConfig);
+router.patch('/admin/game-config', adminAuth_1.requireAdminAuth, (0, validate_1.validateBody)(admin_validator_1.adminGameRewardsConfigSchema), admin_controller_1.patchAdminConfig);
 // NEW: User endpoints
 router.post('/user/freeze', adminAuth_1.requireAdminAuth, (0, validate_1.validateBody)(admin_validator_1.adminFreezeUserSchema), admin_controller_1.freezeUser);
 router.post('/reward/revoke', adminAuth_1.requireAdminAuth, (0, validate_1.validateBody)(admin_validator_1.adminRevokeSchema), admin_controller_1.revokeReward);

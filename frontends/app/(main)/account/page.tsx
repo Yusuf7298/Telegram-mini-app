@@ -1,48 +1,264 @@
 "use client";
-import Link from 'next/link';
 import Image from 'next/image';
-import { useState } from 'react';
-import { ArrowLeft, Bell, Copy, Settings, UserPlus } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ArrowLeft, Bell, Copy, Settings, Share2, UserPlus } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/store/authStore';
+import { useWalletStore } from '@/store/walletStore';
+import { useNotificationStore } from '@/store/notificationStore';
+import { NotificationList } from '@/components/notification/NotificationList';
+import { ReferralList } from '@/components/referral/ReferralList';
+import { getReferralList, ReferralListData, ReferralListItem } from '@/lib/referralApi';
+import { getTelegramInitData } from '@/lib/telegram';
+import { useToast } from '@/components/ui/ToastProvider';
+import { env } from '@/lib/env';
+import { useVisibilityPolling } from '@/hooks/useVisibilityPolling';
+
+const REFERRAL_SHARE_TEXT = 'Join this game and get free rewards 🎁';
+const REFERRAL_POLL_INTERVAL_MS = 20000;
+
+function toNormalizedStatus(value: string) {
+  return value.toUpperCase();
+}
 
 export default function AccountPage() {
   const user = useAuthStore((state) => state.user);
-  const logout = useAuthStore((state) => state.logout);
   const router = useRouter();
-  const [copied, setCopied] = useState(false);
-  const referralCode = 'YOURCODE1234';
+  const [copiedLink, setCopiedLink] = useState(false);
+  const [loadingReferrals, setLoadingReferrals] = useState(true);
+  const [referrals, setReferrals] = useState<ReferralListItem[]>([]);
+  const [activeReferrals, setActiveReferrals] = useState(0);
+  const [totalEarned, setTotalEarned] = useState(0);
+  const [referralError, setReferralError] = useState<string | null>(null);
+  const { showToast } = useToast();
+  const addNotification = useNotificationStore((state) => state.addNotification);
+  const fetchWallet = useWalletStore((state) => state.fetchWallet);
+  const cashBalance = useWalletStore((state) => state.cashBalance);
+  const bonusBalance = useWalletStore((state) => state.bonusBalance);
+  const airtimeBalance = useWalletStore((state) => state.airtimeBalance);
+  const prevStatusByUserRef = useRef<Record<string, string>>({});
+  const activeNotificationSentRef = useRef<Record<string, boolean>>({});
+  const hasBootstrappedReferralsRef = useRef(false);
+  const referralCode = user?.referralCode || 'Unavailable';
+  const profileName = user?.username || [user?.firstName, user?.lastName].filter(Boolean).join(' ') || 'Telegram User';
 
-  const notifications = [
-    { date: '08-10-26', message: 'Congratulations you won ₦1,000 by...' },
-    { date: '08-10-26', message: 'You’ve earned ₦1,000 from referring...' },
-    { date: '08-10-26', message: 'Congratulations you won ₦1,000 by...' },
-    { date: '08-10-26', message: 'You’ve earned ₦1,000 from referring...' },
-  ];
+  const referralLink = useMemo(() => {
+    if (!referralCode || referralCode === 'Unavailable') {
+      return '';
+    }
 
-  const referrals = [
-    { username: 'Aisha', joined: '08-10-26', status: 'Active', earning: '₦1,000' },
-    { username: 'David', joined: '08-10-26', status: 'Active', earning: '₦1,000' },
-    { username: 'Samuel', joined: '08-10-26', status: 'Active', earning: '₦1,000' },
-    { username: 'David', joined: '08-10-26', status: 'Pending', earning: '₦1,000' },
-    { username: 'David', joined: '08-10-26', status: 'Pending', earning: '₦1,000' },
-  ];
+    const configuredFrontendUrl = env.FRONTEND_URL.replace(/\/$/, '');
+    const baseUrl = configuredFrontendUrl || (typeof window !== 'undefined' ? window.location.origin : '');
+    if (!baseUrl) {
+      return '';
+    }
 
-  const handleCopy = async () => {
+    return `${baseUrl}?ref=${encodeURIComponent(referralCode)}`;
+  }, [referralCode]);
+
+  const referralShareText = useMemo(() => {
+    if (!referralLink) {
+      return '';
+    }
+
+    return `${REFERRAL_SHARE_TEXT}\n${referralLink}`;
+  }, [referralLink]);
+
+  const telegramShareUrl = useMemo(() => {
+    if (!referralLink) {
+      return '';
+    }
+
+    return `https://t.me/share/url?url=${encodeURIComponent(referralLink)}&text=${encodeURIComponent(REFERRAL_SHARE_TEXT)}`;
+  }, [referralLink]);
+
+  const whatsappShareUrl = useMemo(() => {
+    if (!referralLink) {
+      return '';
+    }
+
+    return `https://wa.me/?text=${encodeURIComponent(referralShareText)}`;
+  }, [referralLink, referralShareText]);
+
+  const refreshReferralData = useCallback(
+    async (options?: { silent?: boolean }) => {
+      const telegramInitData = getTelegramInitData();
+
+      if (!telegramInitData) {
+        if (!options?.silent) {
+          setLoadingReferrals(false);
+          setReferralError('Telegram session is required to load referral data');
+        }
+        return;
+      }
+
+      if (!options?.silent) {
+        setLoadingReferrals(true);
+        setReferralError(null);
+      }
+
+      try {
+        const response = await getReferralList(telegramInitData);
+        const payload: ReferralListData = response.data.data;
+
+        setReferrals(payload.referrals);
+        setActiveReferrals(payload.totals.activeReferrals);
+        setTotalEarned(payload.totals.totalEarned);
+
+        const nextStatusByUser = payload.referrals.reduce<Record<string, string>>((acc, referral) => {
+          const userKey = referral.referredUserId;
+          acc[userKey] = toNormalizedStatus(referral.status);
+          return acc;
+        }, {});
+
+        if (hasBootstrappedReferralsRef.current) {
+          payload.referrals.forEach((referral) => {
+            const userKey = referral.referredUserId;
+            const currentStatus = toNormalizedStatus(referral.status);
+            const previousStatus = prevStatusByUserRef.current[userKey];
+            const label = referral.user?.trim() || `User ${userKey.slice(0, 6)}`;
+
+            // Notify only on true activation transition
+            if (
+              previousStatus === 'JOINED' &&
+              currentStatus === 'ACTIVE' &&
+              !activeNotificationSentRef.current[userKey]
+            ) {
+              activeNotificationSentRef.current[userKey] = true;
+              const rewardText = `₦${Number(referral.reward ?? 0).toLocaleString()}`;
+              addNotification({
+                kind: 'referral',
+                title: 'Referral became ACTIVE',
+                message: `${label} is now ACTIVE. Reward earned: ${rewardText}.`,
+              });
+              showToast({ type: 'success', message: `${label} became ACTIVE. Reward ${rewardText}` });
+            }
+          });
+        }
+
+        prevStatusByUserRef.current = nextStatusByUser;
+        hasBootstrappedReferralsRef.current = true;
+      } catch (error) {
+        const message =
+          typeof error === 'object' && error !== null && 'message' in error
+            ? String((error as { message?: unknown }).message ?? 'Failed to fetch referral data')
+            : 'Failed to fetch referral data';
+
+        setReferralError(message);
+        if (!options?.silent) {
+          showToast({ type: 'error', message });
+        }
+      } finally {
+        if (!options?.silent) {
+          setLoadingReferrals(false);
+        }
+      }
+    },
+    [addNotification, showToast]
+  );
+
+  useEffect(() => {
+    void fetchWallet();
+  }, [fetchWallet]);
+
+  useVisibilityPolling(
+    useCallback(() => {
+      void refreshReferralData({ silent: true });
+    }, [refreshReferralData]),
+    REFERRAL_POLL_INTERVAL_MS
+  );
+
+  useEffect(() => {
+    const handleReferralRefresh = () => {
+      if (document.visibilityState === 'visible') {
+        void refreshReferralData({ silent: true });
+      }
+    };
+
+    window.addEventListener('referrals:refresh', handleReferralRefresh as EventListener);
+
+    return () => {
+      window.removeEventListener('referrals:refresh', handleReferralRefresh as EventListener);
+    };
+  }, [refreshReferralData]);
+
+  const referralSummaryCards = useMemo(
+    () => [
+      { label: 'Active Referrals', value: activeReferrals.toLocaleString() },
+      { label: 'Total Earned', value: `₦${totalEarned.toLocaleString()}` },
+    ],
+    [activeReferrals, totalEarned]
+  );
+
+  const handleCopyLink = async () => {
+    if (!referralLink) {
+      return;
+    }
+
     try {
-      await navigator.clipboard.writeText(referralCode);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1200);
+      await navigator.clipboard.writeText(referralLink);
+      setCopiedLink(true);
+      addNotification({
+        kind: 'referral',
+        title: 'Referral link copied',
+        message: 'Your invite link is ready to share.',
+      });
+      showToast({ type: 'success', message: 'Referral link copied' });
+      window.setTimeout(() => setCopiedLink(false), 900);
     } catch {
-      setCopied(false);
+      showToast({ type: 'error', message: 'Failed to copy referral link' });
     }
   };
 
-  const stats = [
-    { label: 'Friends', value: '1000' },
-    { label: 'Total Earning', value: '1000' },
-    { label: 'Balance', value: '1000' },
-  ];
+  const openShareWindow = (url: string) => {
+    if (!url) {
+      return false;
+    }
+
+    const shareWindow = window.open(url, '_blank', 'noopener,noreferrer');
+    if (!shareWindow) {
+      showToast({ type: 'error', message: 'Popup blocked. Please allow popups to share.' });
+      return false;
+    }
+
+    shareWindow.opener = null;
+    return true;
+  };
+
+  const handleTelegramShare = async () => {
+    if (!telegramShareUrl) {
+      return;
+    }
+
+    openShareWindow(telegramShareUrl);
+    addNotification({
+      kind: 'referral',
+      title: 'Shared on Telegram',
+      message: 'Your referral link is ready in Telegram share.',
+    });
+  };
+
+  const handleWhatsAppShare = async () => {
+    if (!whatsappShareUrl) {
+      return;
+    }
+
+    openShareWindow(whatsappShareUrl);
+    addNotification({
+      kind: 'referral',
+      title: 'Shared on WhatsApp',
+      message: 'Your referral link is ready in WhatsApp share.',
+    });
+  };
+
+  const stats = useMemo(
+    () => [
+      { label: 'Friends', value: activeReferrals.toLocaleString(), currency: false },
+      { label: 'Total Earned', value: totalEarned.toLocaleString(), currency: true },
+      { label: 'Wallet', value: (cashBalance + bonusBalance + airtimeBalance).toLocaleString(), currency: true },
+    ],
+    [activeReferrals, totalEarned, cashBalance, bonusBalance, airtimeBalance]
+  );
 
   function handleClick() {
     router.back()
@@ -66,60 +282,88 @@ export default function AccountPage() {
         <div className="rounded-[24px] border border-white/10 bg-[#0d1526]/80 px-4 py-6 shadow-[0_18px_60px_rgba(0,0,0,0.35)] backdrop-blur-sm">
           <div className="flex flex-col items-center text-center">
             <div className="h-20 w-20 overflow-hidden rounded-full border-4 border-white/5 bg-[#1b263f]">
-              <Image src={user?.avatar || "/images/users.png"} alt="Profile avatar" width={80} height={80} className="h-full w-full object-cover" />
+              <Image src={user?.profilePhotoUrl || "/images/users.png"} alt="Profile avatar" width={80} height={80} className="h-full w-full object-cover" />
             </div>
-            <div className="mt-4 text-[14px] font-Rubik font-bold tracking-[-0.03em]">{user?.username || 'SESKO'}</div>
-            <div className="mt-1 text-[12px] font-Poppins text-white/50">{user?.phone ? '#OW415' : '#OW415'}</div>
+            <div className="mt-4 text-[14px] font-Rubik font-bold tracking-[-0.03em]">{profileName}</div>
+            <div className="mt-1 text-[12px] font-Poppins text-white/50">{user?.telegramId ? `TG ${user.telegramId}` : 'Telegram profile'}</div>
           </div>
 
           <div className="mt-6 grid grid-cols-3 gap-3">
             {stats.map((item) => (
               <div key={item.label} className="rounded-2xl bg-[#19223a] px-2 py-4">
                 <div className="text-[14px] font-Poppins text-white/80">{item.label}</div>
-                <div className="mt-3 text-[16px] font-Rubik font-medium tracking-[-0.03em]">₦<span className='font-bold'>
-                  {item.value}
-                </span></div>
+                <div className="mt-3 text-[16px] font-Rubik font-medium tracking-[-0.03em]">
+                  {item.currency ? '₦' : ''}
+                  <span className='font-bold'>
+                    {item.value}
+                  </span>
+                </div>
               </div>
             ))}
           </div>
         </div>
 
         <div className="mt-5 rounded-[24px] border border-white/10 bg-[#0d1526]/80 px-4 py-4 shadow-[0_18px_60px_rgba(0,0,0,0.35)] backdrop-blur-sm">
-          <div className="text-[16px] font-bold tracking-[-0.03em] font-Rubik uppercase text-white">REFER A FRIEND & EARN ₦5,000</div>
+          <div className="text-[16px] font-bold tracking-[-0.03em] font-Rubik uppercase text-white">REFER A FRIEND & EARN REWARDS</div>
           <div className="mt-4 text-[14px] font-Poppins text-white/70">Referral Code</div>
           <div className="mt-3 flex items-center gap-2">
             <div className="flex-1 rounded-2xl border border-white/10 bg-[#19223a] px-4 py-4 text-[14px] font-Poppins text-white/55">
               {referralCode}
             </div>
+          </div>
+
+          <div className="mt-4 text-[14px] font-Poppins text-white/70">Referral Link</div>
+          <div className="mt-3 rounded-2xl border border-white/10 bg-[#19223a] px-4 py-4 text-[13px] font-Poppins text-white/70 break-all">
+            {referralLink || 'Referral link unavailable'}
+          </div>
+
+          <div className="mt-3 grid grid-cols-3 gap-2">
             <button
               type="button"
-              onClick={handleCopy}
-              className="flex h-16 w-16 items-center justify-center rounded-2xl border border-[#18e0a8]/40 bg-[#18e0a8]/20 text-[#03DD8D] transition hover:bg-[#18e0a8]/30"
-              aria-label="Copy referral code"
+              onClick={() => {
+                void handleCopyLink();
+              }}
+              className={`flex h-12 items-center justify-center gap-2 rounded-2xl border border-[#18e0a8]/40 bg-[#18e0a8]/20 text-[#03DD8D] transition hover:bg-[#18e0a8]/30 disabled:cursor-not-allowed disabled:opacity-60 ${copiedLink ? 'copied-pop' : ''}`}
+              aria-label="Copy referral link"
+              disabled={!referralLink}
             >
-              {copied ? <span className="text-[12px] font-bold">Done</span> : <Copy className="h-6 w-6" />}
+              <Copy className="h-4 w-4" />
+              <span className="text-[12px] font-bold">{copiedLink ? 'Copied!' : 'Copy link'}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                void handleTelegramShare();
+              }}
+              className="flex h-12 items-center justify-center gap-2 rounded-2xl border border-sky-300/35 bg-sky-400/20 text-sky-200 transition hover:bg-sky-400/30 disabled:cursor-not-allowed disabled:opacity-60"
+              aria-label="Share referral link on Telegram"
+              disabled={!telegramShareUrl}
+            >
+              <Share2 className="h-4 w-4" />
+              <span className="text-[12px] font-bold">Telegram</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                void handleWhatsAppShare();
+              }}
+              className="flex h-12 items-center justify-center gap-2 rounded-2xl border border-emerald-300/35 bg-emerald-400/20 text-emerald-200 transition hover:bg-emerald-400/30 disabled:cursor-not-allowed disabled:opacity-60"
+              aria-label="Share referral link on WhatsApp"
+              disabled={!whatsappShareUrl}
+            >
+              <Share2 className="h-4 w-4" />
+              <span className="text-[12px] font-bold">WhatsApp</span>
             </button>
           </div>
         </div>
 
         <div className="mt-5 grid grid-cols-2 gap-3 rounded-[24px] border border-white/10 bg-[#0d1526]/80 p-4 shadow-[0_18px_60px_rgba(0,0,0,0.35)] backdrop-blur-sm">
-          <div className="rounded-2xl bg-[#19223a] px-4 py-4">
-            <div className="text-[12px] font-Poppins text-white/70">Total Referral</div>
-            <div className="mt-3 text-[12px] font-bold font-Rubik tracking-[-0.03em]">02</div>
-            <div className="mt-4 text-[12px] font-Poppins text-white/55">Total Earning</div>
-            <div className="mt-2 text-[16px] font-bold font-Rubik tracking-[-0.03em]">₦1000</div>
-          </div>
-
-          <div className="flex flex-col rounded-2xl bg-[#19223a] px-4 py-4">
-            <div className="text-[12px] font-Poppins  text-white/55">Claimable Earning</div>
-            <div className="mt-3 text-[16px] font-extrabold tracking-[-0.03em]">₦1000</div>
-            <button
-              type="button"
-              className="mt-auto rounded-xl border border-white/15 bg-white/10 py-3 text-[12px] font-semibold font-Rubik text-white transition hover:bg-white/15"
-            >
-              Claim Now
-            </button>
-          </div>
+          {referralSummaryCards.map((item) => (
+            <div key={item.label} className="rounded-2xl bg-[#19223a] px-4 py-4">
+              <div className="text-[12px] font-Poppins text-white/70">{item.label}</div>
+              <div className="mt-3 text-[16px] font-bold font-Rubik tracking-[-0.03em] text-white">{item.value}</div>
+            </div>
+          ))}
         </div>
 
         <div className="mt-6 flex items-center gap-2 px-1">
@@ -128,26 +372,7 @@ export default function AccountPage() {
         </div>
 
         <div className="mt-4 overflow-hidden rounded-[28px] border border-white/10 bg-[#111a30] px-4 py-4 shadow-[0_18px_60px_rgba(0,0,0,0.35)]">
-          <table className="w-full table-fixed border-separate border-spacing-y-4">
-            <colgroup>
-              <col className="w-[116px]" />
-              <col />
-            </colgroup>
-            <thead>
-              <tr className="text-left text-[16px] font-bold font-Rubik text-white/55">
-                <th className="px-4">Date</th>
-                <th className="px-4">Message</th>
-              </tr>
-            </thead>
-            <tbody>
-              {notifications.map((item, index) => (
-                <tr key={`${item.date}-${index}`} className="rounded-2xl bg-[#1a2238] text-[16px] font-Poppins text-white/80">
-                  <td className="whitespace-nowrap rounded-l-2xl px-4 py-4">{item.date}</td>
-                  <td className="truncate rounded-r-2xl px-4 py-4">{item.message}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <NotificationList />
         </div>
 
         <div className="mt-6 flex items-center gap-2 px-1">
@@ -155,36 +380,18 @@ export default function AccountPage() {
           <span className="text-[20px] font-bold font-Rubik tracking-[-0.03em]">REFERRALS</span>
         </div>
 
-        <div className="mt-4 overflow-hidden rounded-[28px] border border-white/10 bg-[#111a30] px-4 py-4 shadow-[0_18px_60px_rgba(0,0,0,0.35)]">
-          <table className="w-full table-fixed border-separate border-spacing-y-4">
-            <colgroup>
-              <col />
-              <col className="w-[96px]" />
-              <col className="w-[72px]" />
-              <col className="w-[88px]" />
-            </colgroup>
-            <thead>
-              <tr className="text-left text-[12px] font-bold font-Rubik text-white/55">
-                <th className="px-0">Username</th>
-                <th className="px-4">Joined</th>
-                <th className="px-4">Status</th>
-                <th className="px-4">Earning</th>
-              </tr>
-            </thead>
-            <tbody>
-              {referrals.map((item, index) => (
-                <tr
-                  key={`${item.username}-${index}`}
-                  className={`text-[12px] font-Poppins text-white/80 ${index % 2 === 0 ? 'bg-[#1a2238]' : 'bg-transparent'}`}
-                >
-                  <td className="truncate rounded-l-2xl px-4 py-4">{item.username}</td>
-                  <td className="whitespace-nowrap px-4 py-4">{item.joined}</td>
-                  <td className={`px-4 py-4 ${item.status === 'Active' ? 'text-[#18e0a8]' : 'text-[#f5b000]'}`}>{item.status}</td>
-                  <td className="whitespace-nowrap rounded-r-2xl px-4 py-4">{item.earning}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="mt-4">
+          {loadingReferrals ? (
+            <div className="rounded-[24px] border border-white/10 bg-[#111a30] px-4 py-6 text-sm text-white/60">
+              Loading referral table...
+            </div>
+          ) : referralError ? (
+            <div className="rounded-[24px] border border-white/10 bg-[#111a30] px-4 py-6 text-sm text-red-300">
+              {referralError}
+            </div>
+          ) : (
+            <ReferralList referrals={referrals} />
+          )}
         </div>
       </div>
     </div>

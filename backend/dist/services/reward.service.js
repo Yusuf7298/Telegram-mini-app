@@ -10,6 +10,7 @@ const money_1 = require("../utils/money");
 const rewardCache_1 = require("./rewardCache");
 const logger_1 = require("./logger");
 const crypto_1 = __importDefault(require("crypto"));
+const gameConfig_service_1 = require("./gameConfig.service");
 // RTP modifier integration
 async function generateRewardFromDB(boxId, tx) {
     const MAX_ATTEMPTS = 5;
@@ -24,8 +25,8 @@ async function generateRewardFromDB(boxId, tx) {
             };
         }
         // Fetch RTP modifier
-        const config = await tx['gameConfig']?.findUnique({ where: { id: 'global' } });
-        const rtpModifier = config?.rtpModifier ?? 1;
+        const config = await (0, gameConfig_service_1.getValidatedGameConfig)({ client: tx, bypassCache: true });
+        const rtpModifier = config.rtpModifier;
         // Adjust jackpot weights only
         const adjustedRewards = rewards.map(r => r.isJackpot ? { ...r, weight: Math.round(r.weight * rtpModifier) } : r);
         const totalWeight = adjustedRewards.reduce((sum, r) => (0, money_1.add)(sum, (0, money_1.D)(r.weight)), (0, money_1.D)(0));

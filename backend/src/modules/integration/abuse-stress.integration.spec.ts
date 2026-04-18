@@ -17,10 +17,6 @@ jest.mock("../../services/withTransactionRetry", () => ({
   withTransactionRetry: async (_prisma: unknown, fn: (tx: any) => Promise<unknown>) => fn((global as any).__TX__),
 }));
 
-jest.mock("../../services/reward.service", () => ({
-  generateRewardFromDB: jest.fn(async () => ({ amount: new Prisma.Decimal(25) })),
-}));
-
 jest.mock("../../services/rtp.service", () => ({
   adjustRewardProbabilities: jest.fn(async () => ({ adjusted: false })),
 }));

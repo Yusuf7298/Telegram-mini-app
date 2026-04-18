@@ -55,6 +55,23 @@ export type FraudEvent = {
   } | null;
 };
 
+export type AdminAccount = {
+  id: string;
+  platformId: string;
+  username: string | null;
+  role: 'ADMIN' | 'SUPER_ADMIN';
+  createdAt: string;
+};
+
+export type GameRewardsConfig = {
+  id?: string;
+  referralRewardAmount: string | number;
+  freeBoxRewardAmount: string | number;
+  minBoxReward: number;
+  maxBoxReward: number;
+  waitlistBonus: number;
+};
+
 function withAdminSecret(adminSecret: string) {
   return {
     headers: {
@@ -84,6 +101,31 @@ export async function getAdminMetrics(adminSecret: string): Promise<AdminMetrics
   requireSecret(adminSecret);
   const response = await apiClient.get<ApiResponse<AdminMetrics>>('/api/admin/metrics', withAdminSecret(adminSecret));
   return response.data.data;
+}
+
+export async function listAdminAccounts(adminSecret: string): Promise<AdminAccount[]> {
+  requireSecret(adminSecret);
+  const response = await apiClient.get<ApiResponse<{ admins: AdminAccount[] }>>('/api/admin/list', withAdminSecret(adminSecret));
+  return response.data.data.admins;
+}
+
+export async function createAdminAccount(userId: string, adminSecret: string): Promise<AdminAccount> {
+  requireSecret(adminSecret);
+  const response = await apiClient.post<ApiResponse<{ user: AdminAccount }>>(
+    '/api/admin/create-admin',
+    { userId },
+    withAdminSecret(adminSecret),
+  );
+  return response.data.data.user;
+}
+
+export async function removeAdminAccount(userId: string, adminSecret: string): Promise<AdminAccount> {
+  requireSecret(adminSecret);
+  const response = await apiClient.delete<ApiResponse<{ user: AdminAccount }>>('/api/admin/remove-admin', {
+    ...withAdminSecret(adminSecret),
+    data: { userId },
+  });
+  return response.data.data.user;
 }
 
 export async function getRewardsByBox(boxId: string, adminSecret: string): Promise<RewardItem[]> {
@@ -134,4 +176,34 @@ export async function getFraudEvents(adminSecret: string): Promise<FraudEvent[]>
 export async function updateSystemConfig(config: Record<string, unknown>, adminSecret: string): Promise<void> {
   requireSecret(adminSecret);
   await apiClient.post('/api/config/update', config, withAdminSecret(adminSecret));
+}
+
+export async function updateReferralBonus(referralRewardAmount: number, adminSecret: string): Promise<void> {
+  requireSecret(adminSecret);
+  await apiClient.post('/api/admin/referral-bonus', { referralRewardAmount }, withAdminSecret(adminSecret));
+}
+
+export async function getGameRewardsConfig(adminSecret: string): Promise<GameRewardsConfig> {
+  requireSecret(adminSecret);
+  const response = await apiClient.get<ApiResponse<{ config: GameRewardsConfig }>>('/api/admin/config', withAdminSecret(adminSecret));
+  return response.data.data.config;
+}
+
+export async function updateGameRewardsConfig(
+  payload: {
+    referralRewardAmount?: number;
+    freeBoxRewardAmount?: number;
+    minBoxReward?: number;
+    maxBoxReward?: number;
+    waitlistBonus?: number;
+  },
+  adminSecret: string,
+): Promise<GameRewardsConfig> {
+  requireSecret(adminSecret);
+  const response = await apiClient.patch<ApiResponse<{ config: GameRewardsConfig }>>(
+    '/api/admin/config',
+    payload,
+    withAdminSecret(adminSecret),
+  );
+  return response.data.data.config;
 }

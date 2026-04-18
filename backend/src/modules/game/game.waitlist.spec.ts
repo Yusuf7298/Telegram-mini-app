@@ -19,10 +19,6 @@ jest.mock("../../services/idempotency.service", () => ({
   checkIdempotencyKey: (...args: any[]) => checkIdempotencyKey(...args),
 }));
 
-jest.mock("../../services/reward.service", () => ({
-  generateRewardFromDB: jest.fn(),
-}));
-
 jest.mock("../../services/referral.service", () => ({
   logReferral: jest.fn(),
   checkReferralLimits: jest.fn(),
