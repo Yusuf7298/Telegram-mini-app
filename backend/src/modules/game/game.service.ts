@@ -8,6 +8,7 @@ import { logStructuredEvent } from "../../services/logger";
 import { recordBoxOpenAttempt, recordRewardEvent } from "../../services/fraudDetection.service";
 import { createIdempotencyKey, completeIdempotencyKey, checkIdempotencyKey } from "../../services/idempotency.service";
 import { canActivateReferral } from "../../services/rules.service";
+import { getCorrelationId } from "../../services/requestContext.service";
 import { trackBonusUsage } from "../../services/bonus.service";
 import { logReferral, checkReferralLimits } from "../../services/referral.service";
 import { adjustRewardProbabilities } from "../../services/rtp.service";
@@ -141,6 +142,61 @@ async function getGameConfig(tx: Prisma.TransactionClient) {
   };
 }
 
+async function ensureWalletSnapshotInSuccessResponse(
+  tx: Prisma.TransactionClient,
+  userId: string,
+  response: unknown
+) {
+  const wallet = await tx.wallet.findUnique({
+    where: { userId },
+    select: {
+      cashBalance: true,
+      bonusBalance: true,
+    },
+  });
+
+  if (!wallet) {
+    throw new Error("Wallet not found");
+  }
+
+  const walletSnapshot = {
+    cashBalance: wallet.cashBalance.toString(),
+    bonusBalance: wallet.bonusBalance.toString(),
+    airtimeBalance: ZERO.toString(),
+  };
+
+  if (response && typeof response === "object") {
+    const envelope = response as Record<string, unknown>;
+    if (envelope.success === true && envelope.data && typeof envelope.data === "object") {
+      return {
+        ...envelope,
+        data: {
+          ...(envelope.data as Record<string, unknown>),
+          walletSnapshot,
+        },
+      };
+    }
+
+    return {
+      success: true,
+      data: {
+        ...envelope,
+        walletSnapshot,
+      },
+      error: null,
+    };
+  }
+
+  return {
+    success: true,
+    data: {
+      value: response,
+      walletSnapshot,
+    },
+    error: null,
+  };
+}
+
 
 export async function openBox(
   userId: string,
@@ -168,7 +224,7 @@ export async function openBox(
           idempotencyKey,
           timestamp: new Date().toISOString(),
         });
-        return existing.response;
+        return ensureWalletSnapshotInSuccessResponse(tx, userId, existing.response);
       }
       if (existing?.status === "PENDING") {
         throw new Error("Idempotent request is still processing");
@@ -179,7 +235,7 @@ export async function openBox(
       } catch (err) {
         const duplicate = await checkIdempotencyKey({ id: idempotencyKey, userId, tx });
         if (duplicate?.status === "COMPLETED") {
-          return duplicate.response;
+          return ensureWalletSnapshotInSuccessResponse(tx, userId, duplicate.response);
         }
         if (duplicate?.status === "PENDING") {
           throw new Error("Idempotent request is still processing");
@@ -399,7 +455,7 @@ export async function openBox(
       });
 
       await unlockWaitlistBonusIfEligible(tx, userId);
-      const referralActivation = await processReferralActivation(user.id);
+      const referralActivation = await processReferralActivation(tx, user.id);
 
       await detectRapidOnboardingCompletion(tx, userId);
 
@@ -459,7 +515,7 @@ export async function openBox(
         timestamp: new Date().toISOString(),
       });
 
-      return completedResponse;
+      return ensureWalletSnapshotInSuccessResponse(tx, userId, completedResponse);
     });
   }).catch(async (err) => {
     await logStructuredEvent("financial_operation", {
@@ -499,7 +555,7 @@ export async function openFreeBox(
           idempotencyKey,
           timestamp: new Date().toISOString(),
         });
-        return existing.response;
+        return ensureWalletSnapshotInSuccessResponse(tx, userId, existing.response);
       }
       if (existing?.status === "PENDING") {
         throw new Error("Idempotent request is still processing");
@@ -510,7 +566,7 @@ export async function openFreeBox(
       } catch (err) {
         const duplicate = await checkIdempotencyKey({ id: idempotencyKey, userId, tx });
         if (duplicate?.status === "COMPLETED") {
-          return duplicate.response;
+          return ensureWalletSnapshotInSuccessResponse(tx, userId, duplicate.response);
         }
         if (duplicate?.status === "PENDING") {
           throw new Error("Idempotent request is still processing");
@@ -658,6 +714,7 @@ export async function openFreeBox(
           walletSnapshot: {
             cashBalance: walletAfterReward.cashBalance,
             bonusBalance: walletAfterReward.bonusBalance,
+            airtimeBalance: ZERO,
           },
         },
         metadata: {
@@ -669,6 +726,7 @@ export async function openFreeBox(
           walletSnapshot: {
             cashBalance: walletAfterReward.cashBalance,
             bonusBalance: walletAfterReward.bonusBalance,
+            airtimeBalance: ZERO,
           },
         },
         tx,
@@ -682,7 +740,7 @@ export async function openFreeBox(
         timestamp: new Date().toISOString(),
       });
 
-      return completedResponse;
+      return ensureWalletSnapshotInSuccessResponse(tx, userId, completedResponse);
     });
   }).catch(async (err) => {
     await logStructuredEvent("financial_operation", {
@@ -718,92 +776,152 @@ type ReferralActivationResult = {
   referredUserId: string;
   referrerId: string;
   rewardAmount: string;
+  referralId: string;
+  transactionId: string;
 };
 
+type ReferralStructuredLogPayload = {
+  event: "referral_reward_granted" | "referral_duplicate_blocked";
+  inviterId: string;
+  referredUserId: string;
+  rewardAmount: string;
+  status: string;
+  referralId: string | null;
+  transactionId: string | null;
+  reason?: string;
+  detectionSource?: string;
+  correlationId: string;
+};
+
+function createReferralStructuredLogPayload(payload: ReferralStructuredLogPayload) {
+  return {
+    userId: payload.inviterId,
+    endpoint: "game/open-box",
+    action: payload.event,
+    inviterId: payload.inviterId,
+    referredUserId: payload.referredUserId,
+    rewardAmount: payload.rewardAmount,
+    status: payload.status,
+    referralId: payload.referralId,
+    transactionId: payload.transactionId,
+    correlationId: payload.correlationId,
+    timestamp: new Date().toISOString(),
+    ...(payload.reason ? { reason: payload.reason } : {}),
+    ...(payload.detectionSource ? { detectionSource: payload.detectionSource } : {}),
+  };
+}
+
 async function processReferralActivation(
+  tx: Prisma.TransactionClient,
   userId: string
-) : Promise<ReferralActivationResult | null> {
-  try {
-    return await prisma.$transaction(async (tx) => {
-      // Referred user acts as the referral record owner in current schema.
-      const referralRecord = await tx.user.findUnique({
-        where: { id: userId },
-        select: {
-          referredById: true,
-          referralStatus: true,
-        },
-      });
+): Promise<ReferralActivationResult | null> {
+  const commitLogs: Array<{ event: string; fields: Record<string, unknown> }> = [];
 
-      if (!referralRecord?.referredById) {
-        return null;
-      }
+  // Referred user acts as the referral record owner in current schema.
+  const referralRecord = await tx.user.findUnique({
+    where: { id: userId },
+    select: {
+      referredById: true,
+      referralStatus: true,
+    },
+  });
 
-      const referredById = referralRecord.referredById;
-      const config = await getGameConfig(tx);
+  if (!referralRecord?.referredById) {
+    return null;
+  }
 
-      await logStructuredEvent("referral_activation_attempt", {
-        userId,
-        endpoint: "game/open-box",
-        action: "referral_activation_attempt",
+  const referredById = referralRecord.referredById;
+  const config = await getGameConfig(tx);
+  const correlationId = getCorrelationId() ?? "unknown";
+
+  // STRICT lifecycle enforcement: only JOINED can become ACTIVE
+  if (referralRecord.referralStatus !== "JOINED") {
+    return null;
+  }
+
+  const reward = config.referralRewardAmount;
+
+  const grantInsert = await tx.referralRewardGrant.createMany({
+    data: [
+      {
         inviterId: referredById,
         referredUserId: userId,
-        status: referralRecord.referralStatus,
-        rewardAmount: config.referralRewardAmount.toString(),
-      });
+        rewardAmount: reward,
+        sourceAction: "open_box_success",
+      },
+    ],
+    skipDuplicates: true,
+  });
 
-      // STRICT lifecycle enforcement: only JOINED can become ACTIVE
-      if (referralRecord.referralStatus !== "JOINED") {
-        return null;
-      }
-
-      // Idempotent referral reward guard
-      const existingGrant = await tx.referralRewardGrant.findUnique({
+  if (grantInsert.count === ZERO) {
+    const [grant, existingTx] = await Promise.all([
+      tx.referralRewardGrant.findUnique({
         where: { referredUserId: userId },
-        select: { id: true },
-      });
-
-      if (existingGrant) {
-        await logStructuredEvent("referral_duplicate_blocked", {
-          userId,
-          endpoint: "game/open-box",
-          action: "referral_duplicate_blocked",
-          inviterId: referredById,
-          referredUserId: userId,
-          status: referralRecord.referralStatus,
-          rewardAmount: config.referralRewardAmount.toString(),
-          reason: "reward_grant_already_exists",
-        });
-        return null;
-      }
-      const reward = config.referralRewardAmount;
-
-      const referrer = await tx.user.findUnique({
-        where: { id: referredById },
-        select: {
-          id: true,
-          wallet: {
-            select: { cashBalance: true, bonusBalance: true },
+        select: { id: true, rewardAmount: true },
+      }),
+      tx.transaction.findFirst({
+        where: {
+          userId: referredById,
+          type: "REFERRAL",
+          meta: {
+            path: ["referredUserId"],
+            equals: userId,
           },
         },
-      });
+        orderBy: { createdAt: "desc" },
+        select: { id: true },
+      }),
+    ]);
 
-      if (!referrer || !referrer.wallet) {
-        return null;
-      }
+    commitLogs.push({
+      event: "referral_duplicate_blocked",
+      fields: createReferralStructuredLogPayload({
+        event: "referral_duplicate_blocked",
+        inviterId: referredById,
+        referredUserId: userId,
+        rewardAmount: grant?.rewardAmount.toString() ?? "0",
+        status: referralRecord.referralStatus,
+        referralId: grant?.id ?? null,
+        transactionId: existingTx?.id ?? null,
+        reason: "reward_grant_already_exists",
+        detectionSource: "create_many_skip_duplicate",
+        correlationId,
+      }),
+    });
 
-      const before = referrer.wallet.cashBalance.plus(referrer.wallet.bonusBalance);
+    for (const logItem of commitLogs) {
+      await logStructuredEvent(logItem.event, logItem.fields);
+    }
 
-      // Atomic referral reward: insert guard BEFORE wallet mutation
-      await tx.referralRewardGrant.create({
-        data: {
-          referrerId: referredById,
-          referredUserId: userId,
-          amount: reward,
-          sourceAction: "open_box_success",
-        },
-      });
+    return null;
+  }
 
-      const activateResult = await tx.user.updateMany({
+  const rewardGrant = await tx.referralRewardGrant.findUnique({
+    where: { referredUserId: userId },
+    select: { id: true, rewardAmount: true },
+  });
+
+  if (!rewardGrant) {
+    throw new Error("Referral reward grant not found after successful insert");
+  }
+
+  const referrer = await tx.user.findUnique({
+    where: { id: referredById },
+    select: {
+      id: true,
+      wallet: {
+        select: { cashBalance: true, bonusBalance: true },
+      },
+    },
+  });
+
+  if (!referrer || !referrer.wallet) {
+    throw new Error("Referrer not found");
+  }
+
+  const before = referrer.wallet.cashBalance.plus(referrer.wallet.bonusBalance);
+
+  const activateResult = await tx.user.updateMany({
         where: { id: userId, referralStatus: "JOINED" },
         data: {
           referralStatus: "ACTIVE",
@@ -811,16 +929,16 @@ async function processReferralActivation(
         },
       });
 
-      if (activateResult.count === ZERO) {
-        throw new Error("Referral status changed before activation");
-      }
+  if (activateResult.count === ZERO) {
+    throw new Error("Referral status changed before activation");
+  }
 
-      await tx.wallet.update({
+  await tx.wallet.update({
         where: { userId: referredById },
         data: { cashBalance: { increment: reward } },
       });
 
-      await logAudit({
+  await logAudit({
         userId,
         action: "referral_reward_triggered_from_game",
         details: {
@@ -831,20 +949,24 @@ async function processReferralActivation(
         tx,
       });
 
-      await logStructuredEvent("referral_activated", {
-        userId,
-        endpoint: "game/open-box",
-        action: "referral_activated",
-        referrerId: referredById,
-        referralStatus: "ACTIVE",
+  commitLogs.push({
+        event: "referral_activated",
+        fields: {
+          userId,
+          endpoint: "game/open-box",
+          action: "referral_activated",
+          referrerId: referredById,
+          referralStatus: "ACTIVE",
+          correlationId,
+        },
       });
 
-      const referrerWalletAfter = await tx.wallet.findUnique({ where: { userId: referredById } });
-      if (!referrerWalletAfter) {
-        throw new Error("Referrer wallet not found");
-      }
+  const referrerWalletAfter = await tx.wallet.findUnique({ where: { userId: referredById } });
+  if (!referrerWalletAfter) {
+    throw new Error("Referrer wallet not found");
+  }
 
-      await tx.transaction.create({
+  const referralTransaction = await tx.transaction.create({
         data: {
           userId: referredById,
           type: "REFERRAL",
@@ -855,7 +977,21 @@ async function processReferralActivation(
         },
       });
 
-      await logAudit({
+  // Validation: reward log must match persisted DB records.
+  if (!rewardGrant.rewardAmount.equals(reward) || !referralTransaction.amount.equals(reward)) {
+    throw new Error("Referral reward record mismatch between grant and transaction");
+  }
+
+  const referralTxReferredUserId =
+    referralTransaction.meta && typeof referralTransaction.meta === "object"
+      ? (referralTransaction.meta as Record<string, unknown>).referredUserId
+      : undefined;
+
+  if (referralTxReferredUserId !== userId) {
+    throw new Error("Referral transaction meta does not match referred user");
+  }
+
+  await logAudit({
         userId: referredById,
         action: "referral_reward",
         details: {
@@ -866,26 +1002,31 @@ async function processReferralActivation(
         tx,
       });
 
-      await logStructuredEvent("referral_reward_granted", {
-        userId: referredById,
-        endpoint: "game/open-box",
-        action: "referral_reward_granted",
-        inviterId: referredById,
-        referredUserId: userId,
-        status: "ACTIVE",
-        rewardAmount: reward.toString(),
+  commitLogs.push({
+        event: "referral_reward_granted",
+        fields: createReferralStructuredLogPayload({
+          event: "referral_reward_granted",
+          inviterId: referredById,
+          referredUserId: userId,
+          rewardAmount: reward.toString(),
+          status: "ACTIVE",
+          referralId: rewardGrant.id,
+          transactionId: referralTransaction.id,
+          correlationId,
+        }),
       });
 
-      return {
-        referredUserId: userId,
-        referrerId: referredById,
-        rewardAmount: reward.toString(),
-      };
-    });
-  } catch (error) {
-    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-      return null;
-    }
-    throw error;
+  const result: ReferralActivationResult = {
+    referredUserId: userId,
+    referrerId: referredById,
+    rewardAmount: reward.toString(),
+    referralId: rewardGrant.id,
+    transactionId: referralTransaction.id,
+  };
+
+  for (const logItem of commitLogs) {
+    await logStructuredEvent(logItem.event, logItem.fields);
   }
+
+  return result;
 }

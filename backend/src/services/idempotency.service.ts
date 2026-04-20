@@ -1,9 +1,12 @@
 // NEW: IdempotencyKey service
 import { prisma } from "../config/db";
-import { Prisma } from "@prisma/client";
+import { IdempotencyKey, Prisma } from "@prisma/client";
 import { logStructuredEvent } from "./logger";
 
 const IDEMPOTENCY_TTL_MS = 10 * 60 * 1000;
+const IDEMPOTENCY_PENDING_WAIT_DEFAULT_MS = 8000;
+const IDEMPOTENCY_PENDING_POLL_MS = 200;
+const IDEMPOTENCY_STALE_PENDING_MS = 5000;
 
 export type IdempotencyStoredResponse = {
   success: true;
@@ -224,41 +227,112 @@ export async function checkIdempotencyKey({
   id,
   userId,
   tx,
+  waitForCompletionMs = 0,
+  pollIntervalMs = IDEMPOTENCY_PENDING_POLL_MS,
+  pendingStaleAfterMs = IDEMPOTENCY_STALE_PENDING_MS,
+  recoverPending,
 }: {
   id: string;
   userId: string;
   tx?: Prisma.TransactionClient;
+  waitForCompletionMs?: number;
+  pollIntervalMs?: number;
+  pendingStaleAfterMs?: number;
+  recoverPending?: (params: {
+    id: string;
+    userId: string;
+    key: IdempotencyKey;
+    tx?: Prisma.TransactionClient;
+  }) => Promise<any | null>;
 }) {
   const client = tx || prisma;
-  const key = await client.idempotencyKey.findUnique({ where: { id } });
-  if (!key) return null;
-  if (key.userId !== userId) throw new Error("Idempotency key user mismatch");
-  if (key.status === "PENDING" && key.expiresAt && key.expiresAt < new Date()) throw new Error("Idempotency key expired");
+  const maxWaitMs = Math.max(0, waitForCompletionMs || 0);
+  const maxDeadline = Date.now() + (maxWaitMs || IDEMPOTENCY_PENDING_WAIT_DEFAULT_MS);
+  let recoveryAttempted = false;
 
-  if (key.status === "COMPLETED") {
-    const replayReward = toDecimalString((key.response as Record<string, any> | null)?.data?.reward ?? key.rewardAmount);
+  const loadKey = async () => {
+    const key = await client.idempotencyKey.findUnique({ where: { id } });
+    if (!key) return null;
+    if (key.userId !== userId) throw new Error("Idempotency key user mismatch");
+    if (key.status === "PENDING" && key.expiresAt && key.expiresAt < new Date()) {
+      throw new Error("Idempotency key expired");
+    }
 
-    await logStructuredEvent("idempotency_hit", {
-      userId,
-      endpoint: key.action,
-      idempotencyKey: id,
-      action: key.action,
-      timestamp: new Date().toISOString(),
-    });
+    if (key.status === "COMPLETED") {
+      const replayReward = toDecimalString((key.response as Record<string, any> | null)?.data?.reward ?? key.rewardAmount);
 
-    await logStructuredEvent("idempotency_operation", {
-      userId,
-      action: "idempotency_replay",
-      reward: replayReward,
-      idempotencyKey: id,
-      timestamp: new Date().toISOString(),
-    });
+      await logStructuredEvent("idempotency_hit", {
+        userId,
+        endpoint: key.action,
+        idempotencyKey: id,
+        action: key.action,
+        timestamp: new Date().toISOString(),
+      });
 
-    return {
-      ...key,
-      response: normalizeIdempotencyResponse(key.response),
-    };
+      await logStructuredEvent("idempotency_operation", {
+        userId,
+        action: "idempotency_replay",
+        reward: replayReward,
+        idempotencyKey: id,
+        timestamp: new Date().toISOString(),
+      });
+
+      return {
+        ...key,
+        response: normalizeIdempotencyResponse(key.response),
+      };
+    }
+
+    return key;
+  };
+
+  while (true) {
+    const key = await loadKey();
+    if (!key) {
+      return null;
+    }
+
+    if (key.status !== "PENDING") {
+      return key;
+    }
+
+    if (!maxWaitMs) {
+      return key;
+    }
+
+    const ageMs = Date.now() - key.createdAt.getTime();
+    if (!recoveryAttempted && recoverPending && ageMs >= pendingStaleAfterMs) {
+      recoveryAttempted = true;
+
+      const recovered = await recoverPending({ id, userId, key, tx });
+      if (recovered) {
+        try {
+          await completeIdempotencyKey({
+            id,
+            userId,
+            response: recovered,
+            metadata: {
+              action: key.action,
+              recoveredFromPending: true,
+            },
+            tx,
+          });
+        } catch {
+          // Another request may complete the key concurrently; proceed to final read.
+        }
+
+        const completed = await loadKey();
+        if (completed && completed.status === "COMPLETED") {
+          return completed;
+        }
+      }
+    }
+
+    if (Date.now() >= maxDeadline) {
+      return key;
+    }
+
+    const sleepMs = Math.max(10, pollIntervalMs);
+    await new Promise((resolve) => setTimeout(resolve, sleepMs));
   }
-
-  return key;
 }

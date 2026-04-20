@@ -107,14 +107,14 @@ export default function AccountPage() {
 
         const nextStatusByUser = payload.referrals.reduce<Record<string, string>>((acc, referral) => {
           const userKey = referral.referredUserId;
-          acc[userKey] = toNormalizedStatus(referral.status);
+          acc[userKey] = toNormalizedStatus(referral.referralStatus);
           return acc;
         }, {});
 
         if (hasBootstrappedReferralsRef.current) {
           payload.referrals.forEach((referral) => {
             const userKey = referral.referredUserId;
-            const currentStatus = toNormalizedStatus(referral.status);
+            const currentStatus = toNormalizedStatus(referral.referralStatus);
             const previousStatus = prevStatusByUserRef.current[userKey];
             const label = referral.user?.trim() || `User ${userKey.slice(0, 6)}`;
 
@@ -125,7 +125,7 @@ export default function AccountPage() {
               !activeNotificationSentRef.current[userKey]
             ) {
               activeNotificationSentRef.current[userKey] = true;
-              const rewardText = `₦${Number(referral.reward ?? 0).toLocaleString()}`;
+              const rewardText = `₦${referral.rewardAmount.toLocaleString()}`;
               addNotification({
                 kind: 'referral',
                 title: 'Referral became ACTIVE',

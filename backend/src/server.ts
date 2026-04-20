@@ -13,6 +13,7 @@ import rewardsRoutes from "./modules/rewards/rewards.routes";
 import configRoutes from "./modules/config/config.routes";
 import { authMiddleware } from "./middleware/auth.middleware";
 import { assertGameConfigOnStartup } from "./services/gameConfig.service";
+import { correlationIdMiddleware } from "./middleware/correlationId.middleware";
 
 
 const app = express();
@@ -52,11 +53,12 @@ const corsOptions: cors.CorsOptions = {
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-Device-Id", "Idempotency-Key"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Device-Id", "Idempotency-Key", "X-Correlation-Id"],
 };
 
 app.use(cors(corsOptions));
 app.options(/.*/, cors(corsOptions));
+app.use(correlationIdMiddleware);
 
 app.disable("x-powered-by");
 app.use((_req, res, next) => {

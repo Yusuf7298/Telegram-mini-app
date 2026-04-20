@@ -142,14 +142,14 @@ export default function ReferralsPage() {
 
         const nextStatusByUser = payload.referrals.reduce<Record<string, string>>((acc, referral) => {
           const userKey = referral.referredUserId;
-          acc[userKey] = toNormalizedStatus(referral.status);
+          acc[userKey] = toNormalizedStatus(referral.referralStatus);
           return acc;
         }, {});
 
         if (hasBootstrappedReferralsRef.current) {
           payload.referrals.forEach((referral) => {
             const userKey = referral.referredUserId;
-            const currentStatus = toNormalizedStatus(referral.status);
+            const currentStatus = toNormalizedStatus(referral.referralStatus);
             const previousStatus = prevStatusByUserRef.current[userKey];
             const label = referral.user?.trim() || `User ${userKey.slice(0, 6)}`;
 
@@ -160,7 +160,7 @@ export default function ReferralsPage() {
               !activeNotificationSentRef.current[userKey]
             ) {
               activeNotificationSentRef.current[userKey] = true;
-              const rewardText = `₦${Number(referral.reward ?? 0).toLocaleString()}`;
+              const rewardText = `₦${referral.rewardAmount.toLocaleString()}`;
               addNotification({
                 kind: 'referral',
                 title: 'Referral became ACTIVE',
@@ -418,11 +418,11 @@ export default function ReferralsPage() {
 
   const totalReferralsCount = referrals.length;
   const activeReferralsCount = referrals.reduce((count, referral) => {
-    const status = String(referral.status).toUpperCase();
+    const status = referral.referralStatus;
     return status === "ACTIVE" ? count + 1 : count;
   }, 0);
   const totalEarnedFromReferrals = referrals.reduce((sum, referral) => {
-    const reward = Number(referral.reward ?? 0);
+    const reward = referral.rewardAmount;
     return Number.isFinite(reward) ? sum + reward : sum;
   }, 0);
 

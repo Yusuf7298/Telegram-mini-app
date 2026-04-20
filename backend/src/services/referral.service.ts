@@ -5,6 +5,9 @@ import { ApiErrorCode } from "../utils/apiResponse";
 import { logStructuredEvent } from "./logger";
 import { canUseReferral } from "./rules.service";
 import { ONE, ZERO, ZERO_STRING } from "../constants/numbers";
+import { getCorrelationId } from "./requestContext.service";
+import { enforceReferralAbuseGuards } from "./referralAbuse.service";
+import { getValidatedGameConfig } from "./gameConfig.service";
 
 export class ReferralServiceError extends Error {
   code: ApiErrorCode;
@@ -63,8 +66,9 @@ export async function logReferral({
   tx?: Prisma.TransactionClient;
 }) {
   const client = tx || prisma;
-  await client.referralLog.create({
-    data: { referrerId, referredId, ip, deviceId, suspicious: !!suspicious },
+  await client.referralLog.createMany({
+    data: [{ inviterId: referrerId, referredUserId: referredId, ip, deviceId, suspicious: !!suspicious }],
+    skipDuplicates: true,
   });
 }
 
@@ -104,10 +108,15 @@ export async function applyReferralCode({
   }
 
   return prisma.$transaction(async (tx) => {
+    const correlationId = getCorrelationId() ?? "unknown";
+    const config = await getValidatedGameConfig({ bypassCache: true });
     const invitedUser = await tx.user.findUnique({
       where: { id: referredUserId },
       select: {
         id: true,
+        telegramId: true,
+        signupDeviceId: true,
+        deviceHash: true,
         referredById: true,
         referralStatus: true,
         referralJoinedAt: true,
@@ -161,8 +170,10 @@ export async function applyReferralCode({
         referredUserId: invitedUser.id,
         status: invitedUser.referralStatus,
         rewardAmount: ZERO_STRING,
+        correlationId,
         referralCode: existingInviter.referralCode,
-        reason: "already_has_referral_relation",
+        reason: "duplicate_grant",
+        detectionSource: "pre-check",
       });
 
       return {
@@ -195,6 +206,7 @@ export async function applyReferralCode({
       where: { referralCode: normalizedCode },
       select: {
         id: true,
+        telegramId: true,
         referralCount: true,
         wallet: {
           select: {
@@ -212,30 +224,36 @@ export async function applyReferralCode({
       throw new ReferralServiceError("INVALID_INPUT", "Cannot refer yourself");
     }
 
-    const duplicateReferral = await tx.referralLog.findUnique({
-      where: {
-        referrerId_referredId: {
-          referrerId: inviter.id,
-          referredId: invitedUser.id,
-        },
-      },
-      select: { id: true },
+    const abuseGuard = await enforceReferralAbuseGuards({
+      tx,
+      referredUserId: invitedUser.id,
+      inviterId: inviter.id,
+      ip,
+      deviceId: safeDeviceId,
+      invitedTelegramId: invitedUser.telegramId,
+      inviterTelegramId: inviter.telegramId,
+      invitedSignupDeviceId: invitedUser.signupDeviceId,
+      invitedDeviceHash: invitedUser.deviceHash,
+      maxReferralsPerIpPerDay: config.maxReferralsPerIpPerDay,
     });
 
-    if (duplicateReferral) {
-      await logStructuredEvent("referral_duplicate_blocked", {
+    if (!abuseGuard.allowed) {
+      await logStructuredEvent("referral_abuse_blocked", {
         userId: invitedUser.id,
         endpoint: "referral/use",
-        action: "referral_duplicate_blocked",
+        action: "referral_abuse_blocked",
         inviterId: inviter.id,
         referredUserId: invitedUser.id,
         status: invitedUser.referralStatus,
-        rewardAmount: ZERO_STRING,
         referralCode: normalizedCode,
-        reason: "duplicate_referral_log",
+        reason: abuseGuard.reason,
+        ip,
+        deviceId: safeDeviceId,
+        correlationId,
+        ...abuseGuard.details,
       });
 
-      throw new ReferralServiceError("INVALID_INPUT", "Duplicate referral");
+      throw new ReferralServiceError("RATE_LIMIT", "Referral blocked due to abuse detection");
     }
 
     const allowed = await checkReferralLimits({
@@ -246,16 +264,21 @@ export async function applyReferralCode({
       tx,
     });
 
-    await logReferral({
-      referrerId: inviter.id,
-      referredId: invitedUser.id,
-      ip,
-      deviceId: safeDeviceId,
-      suspicious: !allowed,
-      tx,
-    });
-
     if (!allowed) {
+      await logStructuredEvent("referral_abuse_blocked", {
+        userId: invitedUser.id,
+        endpoint: "referral/use",
+        action: "referral_abuse_blocked",
+        inviterId: inviter.id,
+        referredUserId: invitedUser.id,
+        status: invitedUser.referralStatus,
+        referralCode: normalizedCode,
+        reason: "rules_limit_exceeded",
+        ip,
+        deviceId: safeDeviceId,
+        correlationId,
+      });
+
       throw new ReferralServiceError("RATE_LIMIT", "Referral limit exceeded. Try again later.");
     }
 
@@ -298,8 +321,10 @@ export async function applyReferralCode({
         referredUserId: alreadyLinkedUser.id,
         status: alreadyLinkedUser.referralStatus,
         rewardAmount: ZERO_STRING,
+        correlationId,
         referralCode: normalizedCode,
-        reason: "claim_race_already_linked",
+        reason: "duplicate_grant",
+        detectionSource: "post-claim",
       });
 
       const existingInviter = await tx.user.findUnique({
@@ -358,6 +383,15 @@ export async function applyReferralCode({
       };
     }
 
+    await logReferral({
+      referrerId: inviter.id,
+      referredId: invitedUser.id,
+      ip,
+      deviceId: safeDeviceId,
+      suspicious: !allowed,
+      tx,
+    });
+
     const updatedInviter = await tx.user.update({
       where: { id: inviter.id },
       data: {
@@ -406,10 +440,11 @@ export async function applyReferralCode({
       endpoint: "referral/use",
       action: "referral_joined",
       referrerId: inviter.id,
-        inviterId: inviter.id,
-        referredUserId: invitedUser.id,
-        status: "JOINED",
-        rewardAmount: ZERO_STRING,
+      inviterId: inviter.id,
+      referredUserId: invitedUser.id,
+      status: "JOINED",
+      rewardAmount: ZERO_STRING,
+      correlationId,
       referralCode: normalizedCode,
       ip,
       deviceId: safeDeviceId,

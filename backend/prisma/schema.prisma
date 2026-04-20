@@ -179,33 +179,33 @@ model IdempotencyKey {
 
 model ReferralLog {
   id         String   @id @default(uuid())
-  referrerId String
-  referredId String
+  inviterId  String   @map("referrerId")
+  referredUserId String @map("referredId")
   ip         String
   deviceId   String?
   createdAt  DateTime @default(now())
   suspicious Boolean  @default(false)
 
-  referrer User @relation("UserReferralLogs", fields: [referrerId], references: [id])
-  referred User @relation("UserReferredLogs", fields: [referredId], references: [id])
+  inviter User @relation("UserReferralLogs", fields: [inviterId], references: [id])
+  referredUser User @relation("UserReferredLogs", fields: [referredUserId], references: [id])
 
-  @@unique([referrerId, referredId])
+  @@unique([inviterId, referredUserId])
   @@index([ip])
   @@index([deviceId])
 }
 
 model ReferralRewardGrant {
   id             String   @id @default(uuid())
-  referrerId     String
+  inviterId      String   @map("referrerId")
   referredUserId String   @unique
-  amount         Decimal  @db.Decimal(10, 2)
+  rewardAmount   Decimal  @map("amount") @db.Decimal(10, 2)
   sourceAction   String
   createdAt      DateTime @default(now())
 
-  referrer User @relation("ReferralRewardGrantsGiven", fields: [referrerId], references: [id])
-  referred User @relation("ReferralRewardGrantReceived", fields: [referredUserId], references: [id])
+  inviter User @relation("ReferralRewardGrantsGiven", fields: [inviterId], references: [id])
+  referredUser User @relation("ReferralRewardGrantReceived", fields: [referredUserId], references: [id])
 
-  @@index([referrerId, createdAt])
+  @@index([inviterId, createdAt])
 }
 
 model BoxOpenLog {

@@ -118,7 +118,7 @@ export async function detectRepeatedWins(userId: string, tx?: Prisma.Transaction
 export async function detectReferralFarming(userId: string, tx?: Prisma.TransactionClient) {
   const client = tx || prisma;
   const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-  const count = await client.referralLog.count({ where: { referrerId: userId, createdAt: { gte: since } } });
+  const count = await client.referralLog.count({ where: { inviterId: userId, createdAt: { gte: since } } });
   if (count > 10) {
     await AlertService.referralFarming(userId, count);
     await logSuspiciousAction({ userId, type: "referral_fraud", metadata: { count }, tx });

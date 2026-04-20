@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { getReferralCode, getReferralList, useReferralCode } from "./referral.controller";
+import { getReferralAnalytics, getReferralCode, getReferralList, useReferralCode } from "./referral.controller";
 import { verifyTelegramAuth } from "../../middleware/telegramAuth.middleware";
 import { validateBody } from "../../middleware/validate";
 import { referralCodeSchema } from "../../validators/referral.validator";
@@ -9,6 +9,7 @@ const router = Router();
 
 router.get("/code", verifyTelegramAuth, getReferralCode);
 router.get("/list", verifyTelegramAuth, getReferralList);
+router.get("/summary", verifyTelegramAuth, getReferralAnalytics);
 router.post(
 	"/use",
 	verifyTelegramAuth,

@@ -71,7 +71,9 @@ async function main() {
   for (let i = 0; i < 10; ++i) {
     const bot = await prisma.user.create({ data: { platformId: `refbot${i}` } });
     try {
-      await prisma.referralLog.create({ data: { referrerId: user.id, referredId: bot.id, ip: `1.2.3.${i}` } });
+      await prisma.referralLog.create({
+        data: { inviterId: user.id, referredUserId: bot.id, ip: `1.2.3.${i}` },
+      });
       referralSuccess++;
     } catch {
       referralFail++;

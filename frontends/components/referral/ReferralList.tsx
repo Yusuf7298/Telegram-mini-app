@@ -4,8 +4,8 @@ interface ReferralRow {
   referredUserId: string;
   user?: string;
   createdAt: string;
-  status: 'PENDING' | 'JOINED' | 'ACTIVE' | 'pending' | 'joined' | 'active';
-  reward: number;
+  referralStatus: 'PENDING' | 'JOINED' | 'ACTIVE';
+  rewardAmount: number;
 }
 
 interface ReferralListProps {
@@ -41,21 +41,6 @@ const statusDisplay = {
     description: 'Reward earned',
     colorClass: 'bg-emerald-400/15 text-emerald-300',
   },
-  pending: {
-    title: 'PENDING',
-    description: 'Joined but not played',
-    colorClass: 'bg-slate-400/15 text-slate-300',
-  },
-  joined: {
-    title: 'JOINED',
-    description: 'Waiting for play',
-    colorClass: 'bg-amber-400/15 text-amber-300',
-  },
-  active: {
-    title: 'ACTIVE',
-    description: 'Reward earned',
-    colorClass: 'bg-emerald-400/15 text-emerald-300',
-  },
 } as const;
 
 export function ReferralList({ referrals }: ReferralListProps) {
@@ -71,9 +56,9 @@ export function ReferralList({ referrals }: ReferralListProps) {
   useEffect(() => {
     referrals.forEach((referral) => {
       const userKey = referral.referredUserId;
-      const currentStatus = String(referral.status).toUpperCase();
+      const currentStatus = referral.referralStatus;
       const previousStatus = prevStatusByUserRef.current[userKey];
-      const currentReward = Number(referral.reward ?? 0);
+      const currentReward = referral.rewardAmount;
       const previousReward = prevRewardByUserRef.current[userKey] ?? 0;
 
       if (
@@ -209,13 +194,13 @@ export function ReferralList({ referrals }: ReferralListProps) {
         </thead>
         <tbody>
           {referrals.map((referral, index) => {
-            const statusMeta = statusDisplay[referral.status];
+            const statusMeta = statusDisplay[referral.referralStatus];
             const userKey = referral.referredUserId;
             const userLabel = referral.user?.trim() || `User ${userKey.slice(0, 6)}`;
             const isActiveTransition = Boolean(activeTransitions[userKey]);
             const displayedReward = isActiveTransition
-              ? Math.round(animatedRewards[userKey] ?? Number(referral.reward ?? 0))
-              : Number(referral.reward ?? 0);
+              ? Math.round(animatedRewards[userKey] ?? referral.rewardAmount)
+              : referral.rewardAmount;
 
             return (
               <tr
@@ -238,7 +223,7 @@ export function ReferralList({ referrals }: ReferralListProps) {
                     <span>{formatMoney(displayedReward)}</span>
                     {isActiveTransition ? (
                       <span className="referral-active-earned-badge rounded-full bg-emerald-400/20 px-2 py-0.5 text-[10px] font-bold text-emerald-200">
-                        🎉 +₦{Number(referral.reward ?? 0).toLocaleString()} earned
+                        🎉 +₦{referral.rewardAmount.toLocaleString()} earned
                       </span>
                     ) : null}
                   </div>

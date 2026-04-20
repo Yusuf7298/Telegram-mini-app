@@ -1,4 +1,5 @@
 import { env } from "../config/env";
+import { getCorrelationId } from "./requestContext.service";
 
 type LogLevel = "debug" | "info" | "warn" | "error";
 
@@ -12,11 +13,17 @@ function toRequiredContext(fields: LogFields, fallbackAction: string) {
   const userId = typeof fields.userId === "string" && fields.userId.trim() ? fields.userId : "unknown";
   const endpoint = typeof fields.endpoint === "string" && fields.endpoint.trim() ? fields.endpoint : "unknown";
   const action = typeof fields.action === "string" && fields.action.trim() ? fields.action : fallbackAction;
+  const correlationIdField = (fields as Record<string, unknown>).correlationId;
+  const correlationId =
+    typeof correlationIdField === "string" && correlationIdField.trim()
+      ? correlationIdField
+      : getCorrelationId() ?? "unknown";
 
   return {
     userId,
     endpoint,
     action,
+    correlationId,
   };
 }
 
