@@ -120,7 +120,7 @@ export default function DepositPage() {
                   <button
                     key={value}
                     type="button"
-                    onClick={() => setMethod(value)}
+                    onClick={() => setMethod(value as DepositMethod)}
                     className={`flex items-center gap-3 rounded-2xl border px-4 py-4 text-left text-[14px] transition ${active
                       ? 'border-[#18e0a8] bg-[#0a2b2c] text-[#11d29c] shadow-[0_0_0_1px_rgba(24,224,168,0.18),0_0_24px_rgba(24,224,168,0.08)]'
                       : 'border-white/8 bg-white/5 text-white/70 hover:bg-white/8'
