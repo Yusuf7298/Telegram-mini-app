@@ -1,5 +1,6 @@
 import api from "@/lib/apiClient";
 import { ApiResponse } from "@/lib/apiTypes";
+import { withRequestRetry } from "@/lib/requestRetry";
 
 export type GameConfigPayload = {
   referralRewardAmount: number | string;
@@ -9,5 +10,5 @@ export type GameConfigPayload = {
 };
 
 export function getGameConfig() {
-  return api.get<ApiResponse<GameConfigPayload>>("/config/game");
+  return withRequestRetry(() => api.get<ApiResponse<GameConfigPayload>>("/config/game"));
 }

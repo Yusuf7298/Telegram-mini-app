@@ -2,6 +2,7 @@ import { prisma } from "../config/db";
 import { Prisma } from "@prisma/client";
 import { assertDecimal } from "../utils/assertDecimal";
 import { createIdempotencyKey, completeIdempotencyKey, checkIdempotencyKey } from "./idempotency.service";
+import { withTransactionRetry } from "./withTransactionRetry";
 
 // Utility to get wallet and assert existence
 async function getWallet(tx: Prisma.TransactionClient, userId: string) {
@@ -13,7 +14,7 @@ async function getWallet(tx: Prisma.TransactionClient, userId: string) {
 // Deposit cash into wallet (idempotent)
 export async function depositCash(userId: string, amount: Prisma.Decimal, idempotencyKey: string) {
   assertDecimal(amount, "depositCash.amount");
-  return prisma.$transaction(async (tx) => {
+  return withTransactionRetry(prisma, async (tx) => {
     // Idempotency
     let idempKey;
     try {
@@ -46,7 +47,7 @@ export async function depositCash(userId: string, amount: Prisma.Decimal, idempo
 // Spend cash from wallet (idempotent)
 export async function spendCash(userId: string, amount: Prisma.Decimal, idempotencyKey: string) {
   assertDecimal(amount, "spendCash.amount");
-  return prisma.$transaction(async (tx) => {
+  return withTransactionRetry(prisma, async (tx) => {
     let idempKey;
     try {
       idempKey = await createIdempotencyKey({ id: idempotencyKey, userId, action: "spendCash", tx });
@@ -79,7 +80,7 @@ export async function spendCash(userId: string, amount: Prisma.Decimal, idempote
 // Credit bonus to wallet (idempotent)
 export async function creditBonus(userId: string, amount: Prisma.Decimal, idempotencyKey: string) {
   assertDecimal(amount, "creditBonus.amount");
-  return prisma.$transaction(async (tx) => {
+  return withTransactionRetry(prisma, async (tx) => {
     let idempKey;
     try {
       idempKey = await createIdempotencyKey({ id: idempotencyKey, userId, action: "creditBonus", tx });
@@ -111,7 +112,7 @@ export async function creditBonus(userId: string, amount: Prisma.Decimal, idempo
 // Credit cash to wallet (idempotent)
 export async function creditCash(userId: string, amount: Prisma.Decimal, idempotencyKey: string) {
   assertDecimal(amount, "creditCash.amount");
-  return prisma.$transaction(async (tx) => {
+  return withTransactionRetry(prisma, async (tx) => {
     let idempKey;
     try {
       idempKey = await createIdempotencyKey({ id: idempotencyKey, userId, action: "creditCash", tx });

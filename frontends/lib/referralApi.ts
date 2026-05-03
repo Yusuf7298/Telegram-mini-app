@@ -1,5 +1,6 @@
 import api from "@/lib/apiClient";
 import { ApiResponse } from './apiTypes';
+import { withRequestRetry } from './requestRetry';
 
 export type ReferralCodeData = {
   referralCode: string;
@@ -44,23 +45,44 @@ function ensureString(value: unknown, context: string): string {
 }
 
 function ensureNumber(value: unknown, context: string): number {
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
-    throw new Error(`Invalid referral API payload: ${context} must be a finite number`);
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
   }
-  return value;
+
+  if (typeof value === 'string') {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+
+  return 0;
 }
 
 function ensureReferralStatus(value: unknown, context: string): ReferralStatus {
   if (value === 'PENDING' || value === 'JOINED' || value === 'ACTIVE') {
     return value;
   }
-  throw new Error(`Invalid referral API payload: ${context} must be one of PENDING, JOINED, ACTIVE`);
+
+  const normalized = String(value ?? '').toUpperCase();
+  if (normalized === 'PENDING' || normalized === 'JOINED' || normalized === 'ACTIVE') {
+    return normalized;
+  }
+
+  void context;
+  return 'PENDING';
 }
 
 function parseReferralListItem(value: unknown, index: number): ReferralListItem {
   const row = ensureObject(value, `referrals[${index}]`);
-  const referredUserId = ensureString(row.referredUserId, `referrals[${index}].referredUserId`);
-  const createdAt = ensureString(row.createdAt, `referrals[${index}].createdAt`);
+  const referredUserId =
+    typeof row.referredUserId === 'string' && row.referredUserId.trim().length > 0
+      ? row.referredUserId
+      : `unknown-${index}`;
+  const createdAt =
+    typeof row.createdAt === 'string' && row.createdAt.trim().length > 0
+      ? row.createdAt
+      : new Date(0).toISOString();
   const referralStatus = ensureReferralStatus(row.referralStatus, `referrals[${index}].referralStatus`);
   const rewardAmount = ensureNumber(row.rewardAmount, `referrals[${index}].rewardAmount`);
   const parsed: ReferralListItem = {
@@ -70,8 +92,8 @@ function parseReferralListItem(value: unknown, index: number): ReferralListItem 
     rewardAmount,
   };
 
-  if (row.user !== undefined) {
-    parsed.user = ensureString(row.user, `referrals[${index}].user`);
+  if (typeof row.user === 'string' && row.user.trim().length > 0) {
+    parsed.user = row.user;
   }
 
   return parsed;
@@ -79,16 +101,43 @@ function parseReferralListItem(value: unknown, index: number): ReferralListItem 
 
 function parseReferralListData(value: unknown): ReferralListData {
   const data = ensureObject(value, 'data');
-  if (!Array.isArray(data.referrals)) {
-    throw new Error('Invalid referral API payload: data.referrals must be an array');
+  const referralsSource = Array.isArray(data.referrals) ? data.referrals : [];
+
+  const safeRows = referralsSource
+    .map((row, index) => {
+      try {
+        return parseReferralListItem(row, index);
+      } catch {
+        return null;
+      }
+    })
+    .filter((row): row is ReferralListItem => row !== null);
+
+  const totals = ensureObject(data.totals ?? {}, 'data.totals');
+  const activeReferrals = ensureNumber(totals.activeReferrals, 'data.totals.activeReferrals');
+  const totalEarned = ensureNumber(totals.totalEarned, 'data.totals.totalEarned');
+
+  if (!Array.isArray(data.referrals) || !data.totals) {
+    return {
+      referrals: safeRows,
+      totals: {
+        activeReferrals:
+          Number.isFinite(activeReferrals) && activeReferrals > 0
+            ? activeReferrals
+            : safeRows.filter((row) => row.referralStatus === 'ACTIVE').length,
+        totalEarned:
+          Number.isFinite(totalEarned) && totalEarned > 0
+            ? totalEarned
+            : safeRows.reduce((sum, row) => sum + (Number.isFinite(row.rewardAmount) ? row.rewardAmount : 0), 0),
+      },
+    };
   }
 
-  const totals = ensureObject(data.totals, 'data.totals');
   return {
-    referrals: data.referrals.map((row, index) => parseReferralListItem(row, index)),
+    referrals: safeRows,
     totals: {
-      activeReferrals: ensureNumber(totals.activeReferrals, 'data.totals.activeReferrals'),
-      totalEarned: ensureNumber(totals.totalEarned, 'data.totals.totalEarned'),
+      activeReferrals,
+      totalEarned,
     },
   };
 }
@@ -110,23 +159,35 @@ function withTelegramHeader(initData: string, idempotencyKey?: string): Telegram
 }
 
 export function getReferralCode(initData: string) {
-  return api.get<ApiResponse<ReferralCodeData>>("/referral/code", withTelegramHeader(initData));
+  return withRequestRetry(() =>
+    api.get<ApiResponse<ReferralCodeData>>("/referral/code", withTelegramHeader(initData))
+  );
 }
 
 export function getReferralList(initData: string) {
-  return api.get<ApiResponse<ReferralListData>>("/referral/list", withTelegramHeader(initData)).then((response) => {
+  return withRequestRetry(() =>
+    api.get<ApiResponse<ReferralListData>>("/referral/list", withTelegramHeader(initData))
+  ).then((response) => {
     response.data.data = parseReferralListData(response.data.data);
     return response;
   });
 }
 
 export function applyReferralCode(code: string, initData: string, deviceId?: string, idempotencyKey?: string) {
-  return api.post<ApiResponse<ApplyReferralData>>(
-    "/referral/use",
+  return withRequestRetry(
+    () =>
+      api.post<ApiResponse<ApplyReferralData>>(
+        "/referral/use",
+        {
+          referralCode: code,
+          ...(deviceId ? { deviceId } : {}),
+        },
+        withTelegramHeader(initData, idempotencyKey)
+      ),
     {
-      referralCode: code,
-      ...(deviceId ? { deviceId } : {}),
-    },
-    withTelegramHeader(initData, idempotencyKey)
+      maxAttempts: 2,
+      baseDelayMs: 250,
+      maxDelayMs: 900,
+    }
   );
 }

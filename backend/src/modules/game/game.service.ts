@@ -10,7 +10,11 @@ import { createIdempotencyKey, completeIdempotencyKey, checkIdempotencyKey } fro
 import { canActivateReferral } from "../../services/rules.service";
 import { getCorrelationId } from "../../services/requestContext.service";
 import { trackBonusUsage } from "../../services/bonus.service";
-import { logReferral, checkReferralLimits } from "../../services/referral.service";
+import {
+  logReferral,
+  checkReferralLimits,
+  activateReferralFromJoinedToActive,
+} from "../../services/referral.service";
 import { adjustRewardProbabilities } from "../../services/rtp.service";
 import { getValidatedGameConfig } from "../../services/gameConfig.service";
 import {
@@ -22,6 +26,13 @@ import {
 } from "../../services/rules.service";
 import { generateReward, RewardContext } from "../../services/reward.service";
 import { NEGATIVE_ONE, ONE, ZERO } from "../../constants/numbers";
+import { pLimit } from "../../utils/pLimit";
+
+const OPEN_BOX_QUEUE_CONCURRENCY = Math.min(
+  20,
+  Math.max(10, Number(process.env.OPEN_BOX_QUEUE_CONCURRENCY ?? "15"))
+);
+const openBoxQueue = pLimit(OPEN_BOX_QUEUE_CONCURRENCY);
 
 async function unlockWaitlistBonusIfEligible(tx: Prisma.TransactionClient, userId: string) {
   const user = await tx.user.findUnique({
@@ -63,8 +74,11 @@ async function unlockWaitlistBonusIfEligible(tx: Prisma.TransactionClient, userI
   }
 }
 
-async function detectRapidOnboardingCompletion(tx: Prisma.TransactionClient, userId: string) {
-  const config = await getGameConfig(tx);
+async function detectRapidOnboardingCompletion(
+  tx: Prisma.TransactionClient,
+  userId: string,
+  config: Awaited<ReturnType<typeof getGameConfig>>
+) {
   const lastFivePlayTransactions = await tx.transaction.findMany({
     where: {
       userId,
@@ -122,7 +136,7 @@ async function enforceGameplayPacing(
   }
 }
 
-async function getGameConfig(tx: Prisma.TransactionClient) {
+async function getGameConfig() {
   const config = await getValidatedGameConfig({ bypassCache: true });
   return {
     rtpModifier: config.rtpModifier,
@@ -205,17 +219,65 @@ export async function openBox(
   ip?: string,
   deviceId?: string
 ) {
-  return withUserLock(userId, async () => {
-    return withTransactionRetry(prisma, async (tx) => {
-      await logStructuredEvent("financial_operation", {
-        userId,
-        action: "open_box_attempt",
-        reward: null,
-        idempotencyKey,
-        timestamp: new Date().toISOString(),
-      });
+  return openBoxQueue(() => runOpenBox(userId, boxId, idempotencyKey, ip, deviceId));
+}
 
-      const existing = await checkIdempotencyKey({ id: idempotencyKey, userId, tx });
+async function runOpenBox(
+  userId: string,
+  boxId: string,
+  idempotencyKey: string,
+  ip?: string,
+  deviceId?: string
+) {
+  const config = await getGameConfig();
+  let committedReward: Prisma.Decimal | null = null;
+  let shouldAdjustRtp = false;
+  let postCommitReferralCheck: { totalPlaysCount: number; referredById: string | null } | null = null;
+
+  return withUserLock(userId, async () => {
+      const completed = await withTransactionRetry(prisma, async (tx) => {
+      const recoverPendingOpenBox = async () => {
+        const rewardTx = await tx.transaction.findFirst({
+          where: {
+            userId,
+            boxId,
+            type: "BOX_REWARD",
+            meta: {
+              equals: idempotencyKey,
+            },
+          },
+          orderBy: { createdAt: "desc" },
+          select: { amount: true },
+        });
+
+        if (!rewardTx) {
+          return null;
+        }
+
+        const walletSnapshot = await tx.wallet.findUnique({
+          where: { userId },
+          select: { cashBalance: true, bonusBalance: true },
+        });
+
+        return {
+          reward: rewardTx.amount.toString(),
+          walletSnapshot: {
+            cashBalance: walletSnapshot?.cashBalance ?? ZERO,
+            bonusBalance: walletSnapshot?.bonusBalance ?? ZERO,
+            airtimeBalance: ZERO,
+          },
+        };
+      };
+
+      const existing = await checkIdempotencyKey({
+        id: idempotencyKey,
+        userId,
+        tx,
+        waitForCompletionMs: 1500,
+        pollIntervalMs: 50,
+        pendingStaleAfterMs: 250,
+        recoverPending: async () => recoverPendingOpenBox(),
+      });
       if (existing?.status === "COMPLETED") {
         await logStructuredEvent("financial_operation", {
           userId,
@@ -233,7 +295,15 @@ export async function openBox(
       try {
         await createIdempotencyKey({ id: idempotencyKey, userId, action: "openBox", tx });
       } catch (err) {
-        const duplicate = await checkIdempotencyKey({ id: idempotencyKey, userId, tx });
+        const duplicate = await checkIdempotencyKey({
+          id: idempotencyKey,
+          userId,
+          tx,
+          waitForCompletionMs: 1500,
+          pollIntervalMs: 50,
+          pendingStaleAfterMs: 250,
+          recoverPending: async () => recoverPendingOpenBox(),
+        });
         if (duplicate?.status === "COMPLETED") {
           return ensureWalletSnapshotInSuccessResponse(tx, userId, duplicate.response);
         }
@@ -257,7 +327,6 @@ export async function openBox(
       });
 
       if (!user) throw new Error("User not found");
-      const config = await getGameConfig(tx);
       const playAllowed = await canUserPlay({
         user: {
           isFrozen: user.isFrozen,
@@ -359,10 +428,8 @@ export async function openBox(
         isOnboarding,
       };
       const reward = generateReward(config, context);
-
-      if (!isOnboarding) {
-        await adjustRewardProbabilities(false);
-      }
+      committedReward = reward;
+      shouldAdjustRtp = !isOnboarding;
 
       await logStructuredEvent("financial_operation", {
         userId,
@@ -371,27 +438,6 @@ export async function openBox(
         idempotencyKey,
         timestamp: new Date().toISOString(),
       });
-
-      const openBoxSuspicion = recordBoxOpenAttempt(userId);
-      if (openBoxSuspicion.isSuspicious) {
-        await logStructuredEvent("fraud_detected", {
-          userId,
-          reason: openBoxSuspicion.reason,
-          type: "open_box_rate",
-          timestamp: new Date().toISOString(),
-        });
-      }
-
-      const rewardSuspicion = recordRewardEvent(userId, reward);
-      if (rewardSuspicion.isSuspicious) {
-        await logStructuredEvent("fraud_detected", {
-          userId,
-          reason: rewardSuspicion.reason,
-          type: "reward_spike",
-          amount: reward.toString(),
-          timestamp: new Date().toISOString(),
-        });
-      }
 
       await tx.wallet.update({
         where: { userId },
@@ -421,6 +467,7 @@ export async function openBox(
           amount: reward,
           balanceBefore: walletAfterDeduct.cashBalance.plus(walletAfterDeduct.bonusBalance),
           balanceAfter: walletAfterReward.cashBalance.plus(walletAfterReward.bonusBalance),
+          meta: idempotencyKey,
         },
       });
 
@@ -453,32 +500,21 @@ export async function openBox(
         },
         select: { totalPlaysCount: true, referredById: true },
       });
+      postCommitReferralCheck = {
+        totalPlaysCount: playState.totalPlaysCount,
+        referredById: playState.referredById,
+      };
 
       await unlockWaitlistBonusIfEligible(tx, userId);
-      const referralActivation = await processReferralActivation(tx, user.id);
+      const referralActivation = await activateReferralFromJoinedToActive({
+        referredUserId: user.id,
+        sourceAction: "open_box_success",
+        endpoint: "game/open-box",
+        tx,
+        rewardAmount: config.referralRewardAmount,
+      });
 
-      await detectRapidOnboardingCompletion(tx, userId);
-
-      // Referral anti-abuse and delayed reward.
-      if (shouldEvaluateReferralOnPlay(user.totalPlaysCount, playState.referredById)) {
-        const referrer = await tx.user.findUnique({ where: { id: playState.referredById } });
-        if (referrer && referrer.id === user.id) {
-          await logReferral({ referrerId: playState.referredById, referredId: userId, ip: ip || "", deviceId, suspicious: true, tx });
-          await logSuspiciousAction({ userId, type: "referral_fraud", metadata: { referrerId: playState.referredById }, tx });
-        } else {
-          const allowed = await checkReferralLimits({
-            ip: ip || "",
-            deviceId,
-            referrerId: playState.referredById,
-            referredId: userId,
-            tx,
-          });
-          await logReferral({ referrerId: playState.referredById, referredId: userId, ip: ip || "", deviceId, suspicious: !allowed, tx });
-          if (!allowed) {
-            await logSuspiciousAction({ userId, type: "referral_fraud", metadata: { referrerId: playState.referredById }, tx });
-          }
-        }
-      }
+      await detectRapidOnboardingCompletion(tx, userId, config);
 
       const completedResponse = await completeIdempotencyKey({
         id: idempotencyKey,
@@ -515,19 +551,105 @@ export async function openBox(
         timestamp: new Date().toISOString(),
       });
 
-      return ensureWalletSnapshotInSuccessResponse(tx, userId, completedResponse);
+        return ensureWalletSnapshotInSuccessResponse(tx, userId, completedResponse);
+      });
+
+      if (shouldAdjustRtp) {
+        await adjustRewardProbabilities(false).catch(async (error) => {
+          await logStructuredEvent("rtp_adjustment_failed", {
+            userId,
+            endpoint: "game/open-box",
+            action: "rtp_adjustment_failed",
+            idempotencyKey,
+            message: error instanceof Error ? error.message : String(error),
+            timestamp: new Date().toISOString(),
+          });
+        });
+      }
+
+      if (committedReward) {
+        const [openBoxSuspicion, rewardSuspicion] = await Promise.all([
+          recordBoxOpenAttempt(userId),
+          recordRewardEvent(userId, committedReward),
+        ]);
+
+        if (openBoxSuspicion.isSuspicious) {
+          await logStructuredEvent("fraud_detected", {
+            userId,
+            reason: openBoxSuspicion.reason,
+            type: "open_box_rate",
+            timestamp: new Date().toISOString(),
+          });
+        }
+
+        if (rewardSuspicion.isSuspicious) {
+          await logStructuredEvent("fraud_detected", {
+            userId,
+            reason: rewardSuspicion.reason,
+            type: "reward_spike",
+            amount: committedReward.toString(),
+            timestamp: new Date().toISOString(),
+          });
+        }
+      }
+
+      if (
+        postCommitReferralCheck &&
+        shouldEvaluateReferralOnPlay(postCommitReferralCheck.totalPlaysCount, postCommitReferralCheck.referredById)
+      ) {
+        const referrerId = postCommitReferralCheck.referredById;
+        if (referrerId) {
+          const referrer = await prisma.user.findUnique({ where: { id: referrerId } });
+          if (referrer && referrer.id === userId) {
+            await logReferral({
+              referrerId,
+              referredId: userId,
+              ip: ip || "",
+              deviceId,
+              suspicious: true,
+            });
+            await logSuspiciousAction({
+              userId,
+              type: "referral_fraud",
+              metadata: { referrerId },
+            });
+          } else {
+            const allowed = await checkReferralLimits({
+              ip: ip || "",
+              deviceId,
+              referrerId,
+              referredId: userId,
+            });
+            await logReferral({
+              referrerId,
+              referredId: userId,
+              ip: ip || "",
+              deviceId,
+              suspicious: !allowed,
+            });
+            if (!allowed) {
+              await logSuspiciousAction({
+                userId,
+                type: "referral_fraud",
+                metadata: { referrerId },
+              });
+            }
+          }
+        }
+      }
+
+      return completed;
+    }).catch(async (err) => {
+      await logStructuredEvent("financial_operation", {
+        userId,
+        action: "box_open_failed",
+        reward: null,
+        idempotencyKey,
+        timestamp: new Date().toISOString(),
+        message: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
     });
-  }).catch(async (err) => {
-    await logStructuredEvent("financial_operation", {
-      userId,
-      action: "box_open_failed",
-      reward: null,
-      idempotencyKey,
-      timestamp: new Date().toISOString(),
-      message: err instanceof Error ? err.message : String(err),
-    });
-    throw err;
-  });
 }
 
 export async function openFreeBox(
@@ -536,8 +658,11 @@ export async function openFreeBox(
   ip?: string,
   deviceId?: string
 ) {
+  const config = await getGameConfig();
+  let committedReward: Prisma.Decimal | null = null;
+
   return withUserLock(userId, async () => {
-    return withTransactionRetry(prisma, async (tx) => {
+    const completed = await withTransactionRetry(prisma, async (tx) => {
       await logStructuredEvent("financial_operation", {
         userId,
         action: "open_free_box_attempt",
@@ -589,7 +714,6 @@ export async function openFreeBox(
         },
       });
       if (!user) throw new Error("User not found");
-      const config = await getGameConfig(tx);
       const playAllowed = await canUserPlay({
         user: {
           isFrozen: user.isFrozen,
@@ -622,27 +746,7 @@ export async function openFreeBox(
 
       const context: RewardContext = { kind: "free_box" };
       const reward = generateReward(config, context);
-
-      const openBoxSuspicion = recordBoxOpenAttempt(userId);
-      if (openBoxSuspicion.isSuspicious) {
-        await logStructuredEvent("fraud_detected", {
-          userId,
-          reason: openBoxSuspicion.reason,
-          type: "open_box_rate",
-          timestamp: new Date().toISOString(),
-        });
-      }
-
-      const rewardSuspicion = recordRewardEvent(userId, reward);
-      if (rewardSuspicion.isSuspicious) {
-        await logStructuredEvent("fraud_detected", {
-          userId,
-          reason: rewardSuspicion.reason,
-          type: "reward_spike",
-          amount: reward.toString(),
-          timestamp: new Date().toISOString(),
-        });
-      }
+      committedReward = reward;
 
       await logStructuredEvent("financial_operation", {
         userId,
@@ -700,7 +804,7 @@ export async function openFreeBox(
 
       await unlockWaitlistBonusIfEligible(tx, userId);
 
-      await detectRapidOnboardingCompletion(tx, userId);
+      await detectRapidOnboardingCompletion(tx, userId, config);
 
       const completedResponse = await completeIdempotencyKey({
         id: idempotencyKey,
@@ -742,6 +846,34 @@ export async function openFreeBox(
 
       return ensureWalletSnapshotInSuccessResponse(tx, userId, completedResponse);
     });
+
+    if (committedReward) {
+      const [openBoxSuspicion, rewardSuspicion] = await Promise.all([
+        recordBoxOpenAttempt(userId),
+        recordRewardEvent(userId, committedReward),
+      ]);
+
+      if (openBoxSuspicion.isSuspicious) {
+        await logStructuredEvent("fraud_detected", {
+          userId,
+          reason: openBoxSuspicion.reason,
+          type: "open_box_rate",
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      if (rewardSuspicion.isSuspicious) {
+        await logStructuredEvent("fraud_detected", {
+          userId,
+          reason: rewardSuspicion.reason,
+          type: "reward_spike",
+          amount: committedReward.toString(),
+          timestamp: new Date().toISOString(),
+        });
+      }
+    }
+
+    return completed;
   }).catch(async (err) => {
     await logStructuredEvent("financial_operation", {
       userId,
@@ -772,261 +904,3 @@ export async function getBoxes() {
   }));
 }
 
-type ReferralActivationResult = {
-  referredUserId: string;
-  referrerId: string;
-  rewardAmount: string;
-  referralId: string;
-  transactionId: string;
-};
-
-type ReferralStructuredLogPayload = {
-  event: "referral_reward_granted" | "referral_duplicate_blocked";
-  inviterId: string;
-  referredUserId: string;
-  rewardAmount: string;
-  status: string;
-  referralId: string | null;
-  transactionId: string | null;
-  reason?: string;
-  detectionSource?: string;
-  correlationId: string;
-};
-
-function createReferralStructuredLogPayload(payload: ReferralStructuredLogPayload) {
-  return {
-    userId: payload.inviterId,
-    endpoint: "game/open-box",
-    action: payload.event,
-    inviterId: payload.inviterId,
-    referredUserId: payload.referredUserId,
-    rewardAmount: payload.rewardAmount,
-    status: payload.status,
-    referralId: payload.referralId,
-    transactionId: payload.transactionId,
-    correlationId: payload.correlationId,
-    timestamp: new Date().toISOString(),
-    ...(payload.reason ? { reason: payload.reason } : {}),
-    ...(payload.detectionSource ? { detectionSource: payload.detectionSource } : {}),
-  };
-}
-
-async function processReferralActivation(
-  tx: Prisma.TransactionClient,
-  userId: string
-): Promise<ReferralActivationResult | null> {
-  const commitLogs: Array<{ event: string; fields: Record<string, unknown> }> = [];
-
-  // Referred user acts as the referral record owner in current schema.
-  const referralRecord = await tx.user.findUnique({
-    where: { id: userId },
-    select: {
-      referredById: true,
-      referralStatus: true,
-    },
-  });
-
-  if (!referralRecord?.referredById) {
-    return null;
-  }
-
-  const referredById = referralRecord.referredById;
-  const config = await getGameConfig(tx);
-  const correlationId = getCorrelationId() ?? "unknown";
-
-  // STRICT lifecycle enforcement: only JOINED can become ACTIVE
-  if (referralRecord.referralStatus !== "JOINED") {
-    return null;
-  }
-
-  const reward = config.referralRewardAmount;
-
-  const grantInsert = await tx.referralRewardGrant.createMany({
-    data: [
-      {
-        inviterId: referredById,
-        referredUserId: userId,
-        rewardAmount: reward,
-        sourceAction: "open_box_success",
-      },
-    ],
-    skipDuplicates: true,
-  });
-
-  if (grantInsert.count === ZERO) {
-    const [grant, existingTx] = await Promise.all([
-      tx.referralRewardGrant.findUnique({
-        where: { referredUserId: userId },
-        select: { id: true, rewardAmount: true },
-      }),
-      tx.transaction.findFirst({
-        where: {
-          userId: referredById,
-          type: "REFERRAL",
-          meta: {
-            path: ["referredUserId"],
-            equals: userId,
-          },
-        },
-        orderBy: { createdAt: "desc" },
-        select: { id: true },
-      }),
-    ]);
-
-    commitLogs.push({
-      event: "referral_duplicate_blocked",
-      fields: createReferralStructuredLogPayload({
-        event: "referral_duplicate_blocked",
-        inviterId: referredById,
-        referredUserId: userId,
-        rewardAmount: grant?.rewardAmount.toString() ?? "0",
-        status: referralRecord.referralStatus,
-        referralId: grant?.id ?? null,
-        transactionId: existingTx?.id ?? null,
-        reason: "reward_grant_already_exists",
-        detectionSource: "create_many_skip_duplicate",
-        correlationId,
-      }),
-    });
-
-    for (const logItem of commitLogs) {
-      await logStructuredEvent(logItem.event, logItem.fields);
-    }
-
-    return null;
-  }
-
-  const rewardGrant = await tx.referralRewardGrant.findUnique({
-    where: { referredUserId: userId },
-    select: { id: true, rewardAmount: true },
-  });
-
-  if (!rewardGrant) {
-    throw new Error("Referral reward grant not found after successful insert");
-  }
-
-  const referrer = await tx.user.findUnique({
-    where: { id: referredById },
-    select: {
-      id: true,
-      wallet: {
-        select: { cashBalance: true, bonusBalance: true },
-      },
-    },
-  });
-
-  if (!referrer || !referrer.wallet) {
-    throw new Error("Referrer not found");
-  }
-
-  const before = referrer.wallet.cashBalance.plus(referrer.wallet.bonusBalance);
-
-  const activateResult = await tx.user.updateMany({
-        where: { id: userId, referralStatus: "JOINED" },
-        data: {
-          referralStatus: "ACTIVE",
-          referralActivatedAt: new Date(),
-        },
-      });
-
-  if (activateResult.count === ZERO) {
-    throw new Error("Referral status changed before activation");
-  }
-
-  await tx.wallet.update({
-        where: { userId: referredById },
-        data: { cashBalance: { increment: reward } },
-      });
-
-  await logAudit({
-        userId,
-        action: "referral_reward_triggered_from_game",
-        details: {
-          referredById,
-          sourceAction: "open_box_success",
-          referralStatusTransition: "JOINED_TO_ACTIVE",
-        },
-        tx,
-      });
-
-  commitLogs.push({
-        event: "referral_activated",
-        fields: {
-          userId,
-          endpoint: "game/open-box",
-          action: "referral_activated",
-          referrerId: referredById,
-          referralStatus: "ACTIVE",
-          correlationId,
-        },
-      });
-
-  const referrerWalletAfter = await tx.wallet.findUnique({ where: { userId: referredById } });
-  if (!referrerWalletAfter) {
-    throw new Error("Referrer wallet not found");
-  }
-
-  const referralTransaction = await tx.transaction.create({
-        data: {
-          userId: referredById,
-          type: "REFERRAL",
-          amount: reward,
-          balanceBefore: before,
-          balanceAfter: referrerWalletAfter.cashBalance.plus(referrerWalletAfter.bonusBalance),
-          meta: { referredUserId: userId, milestone: "open_box_first_success" },
-        },
-      });
-
-  // Validation: reward log must match persisted DB records.
-  if (!rewardGrant.rewardAmount.equals(reward) || !referralTransaction.amount.equals(reward)) {
-    throw new Error("Referral reward record mismatch between grant and transaction");
-  }
-
-  const referralTxReferredUserId =
-    referralTransaction.meta && typeof referralTransaction.meta === "object"
-      ? (referralTransaction.meta as Record<string, unknown>).referredUserId
-      : undefined;
-
-  if (referralTxReferredUserId !== userId) {
-    throw new Error("Referral transaction meta does not match referred user");
-  }
-
-  await logAudit({
-        userId: referredById,
-        action: "referral_reward",
-        details: {
-          rewardAmount: reward.toString(),
-          referredUserId: userId,
-          milestone: "open_box_first_success",
-        },
-        tx,
-      });
-
-  commitLogs.push({
-        event: "referral_reward_granted",
-        fields: createReferralStructuredLogPayload({
-          event: "referral_reward_granted",
-          inviterId: referredById,
-          referredUserId: userId,
-          rewardAmount: reward.toString(),
-          status: "ACTIVE",
-          referralId: rewardGrant.id,
-          transactionId: referralTransaction.id,
-          correlationId,
-        }),
-      });
-
-  const result: ReferralActivationResult = {
-    referredUserId: userId,
-    referrerId: referredById,
-    rewardAmount: reward.toString(),
-    referralId: rewardGrant.id,
-    transactionId: referralTransaction.id,
-  };
-
-  for (const logItem of commitLogs) {
-    await logStructuredEvent(logItem.event, logItem.fields);
-  }
-
-  return result;
-}

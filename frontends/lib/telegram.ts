@@ -69,10 +69,10 @@ export function disableTelegramSwipe() {
 export async function sendTelegramUserIdToBackend(apiUrl: string) {
   const user = getTelegramUser();
   if (user) {
-    await fetch(apiUrl, {
+    await apiRequestWithRetry(() => fetch(apiUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ telegramUserId: user.id }),
-    });
+    }), 2, 8000);
   }
 }

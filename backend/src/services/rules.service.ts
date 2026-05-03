@@ -1,5 +1,6 @@
 import { Prisma, PrismaClient } from "@prisma/client";
 import { prisma } from "../config/db";
+import { redis } from "../config/redis";
 import { getValidatedGameConfig } from "./gameConfig.service";
 
 type DbClient = Prisma.TransactionClient | PrismaClient;
@@ -13,6 +14,9 @@ type PlayRuleUser = {
 type ReferralRule = {
   status: string;
 };
+
+const DAY_WINDOW_SECONDS = 24 * 60 * 60;
+const MAX_REFERRAL_ATTEMPTS_PER_USER_PER_DAY = 10;
 
 function resolveClient(client?: DbClient) {
   return client ?? prisma;
@@ -131,17 +135,56 @@ export async function canUseReferral({
 }): Promise<boolean> {
   const resolvedClient = resolveClient(client);
   const config = await getValidatedGameConfig({ bypassCache: true });
-  const since = new Date(Date.now() - config.referralWindowMs);
+  const now = new Date();
+  const dayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const dayBucket = dayStart.toISOString().slice(0, 10);
 
-  const countByIp = await resolvedClient.referralLog.count({
-    where: {
-      ip,
-      createdAt: { gte: since },
-    },
-  });
+  if (referredId) {
+    await resolvedClient.user.updateMany({
+      where: { id: referredId },
+      data: {
+        referralAttempts: { increment: 1 },
+        lastReferralAt: now,
+      },
+    });
+  }
+
+  const safeIp = ip?.trim() || "unknown";
+  const safeDeviceId = deviceId?.trim() || undefined;
+
+  let countByIp: number;
+  try {
+    const ipKey = `referral:ip:${dayBucket}:${safeIp}`;
+    countByIp = await redis.incr(ipKey);
+    if (countByIp === 1) {
+      await redis.expire(ipKey, DAY_WINDOW_SECONDS);
+    }
+  } catch {
+    countByIp = await resolvedClient.referralLog.count({
+      where: {
+        ip: safeIp,
+        createdAt: { gte: dayStart },
+      },
+    });
+  }
 
   if (countByIp >= config.maxReferralsPerIpPerDay) {
     return false;
+  }
+
+  if (referredId) {
+    try {
+      const userAttemptKey = `referral:attempt:user:${dayBucket}:${referredId}`;
+      const userAttemptsToday = await redis.incr(userAttemptKey);
+      if (userAttemptsToday === 1) {
+        await redis.expire(userAttemptKey, DAY_WINDOW_SECONDS);
+      }
+      if (userAttemptsToday > MAX_REFERRAL_ATTEMPTS_PER_USER_PER_DAY) {
+        return false;
+      }
+    } catch {
+      // Redis outage should not break request flow; DB checks still enforce IP/device constraints.
+    }
   }
 
   if (referrerId && referredId) {
@@ -157,13 +200,23 @@ export async function canUseReferral({
     }
   }
 
-  if (deviceId) {
-    const countByDevice = await resolvedClient.referralLog.count({
-      where: {
-        deviceId,
-        createdAt: { gte: since },
-      },
-    });
+  if (safeDeviceId) {
+    let countByDevice: number;
+    try {
+      const deviceKey = `referral:device:${dayBucket}:${safeDeviceId}`;
+      countByDevice = await redis.incr(deviceKey);
+      if (countByDevice === 1) {
+        await redis.expire(deviceKey, DAY_WINDOW_SECONDS);
+      }
+    } catch {
+      countByDevice = await resolvedClient.referralLog.count({
+        where: {
+          deviceId: safeDeviceId,
+          createdAt: { gte: dayStart },
+        },
+      });
+    }
+
     if (countByDevice >= config.maxReferralsPerIpPerDay) {
       return false;
     }

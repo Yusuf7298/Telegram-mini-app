@@ -2,44 +2,32 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.getReferralCode = getReferralCode;
 exports.getReferralList = getReferralList;
+exports.getReferralAnalytics = getReferralAnalytics;
 exports.useReferralCode = useReferralCode;
-const db_1 = require("../../config/db");
 const client_1 = require("@prisma/client");
+const db_1 = require("../../config/db");
 const referral_service_1 = require("../../services/referral.service");
 const suspiciousActionLog_service_1 = require("../../services/suspiciousActionLog.service");
 const responder_1 = require("../../utils/responder");
+const dbHealthGuard_middleware_1 = require("../../middleware/dbHealthGuard.middleware");
 function getRequestUserId(req) {
     return req.userId;
 }
-async function ensureWalletSnapshotInResponseData(payload, userId) {
-    if (payload && typeof payload === "object") {
-        const data = payload;
-        if (data.walletSnapshot && typeof data.walletSnapshot === "object") {
-            return payload;
+function parseRewardAmount(details) {
+    if (!details) {
+        return new client_1.Prisma.Decimal(0);
+    }
+    try {
+        const parsed = JSON.parse(details);
+        const rewardAmount = parsed.rewardAmount;
+        if (typeof rewardAmount === "string" || typeof rewardAmount === "number") {
+            return new client_1.Prisma.Decimal(rewardAmount);
         }
     }
-    const wallet = await db_1.prisma.wallet.findUnique({
-        where: { userId },
-        select: {
-            cashBalance: true,
-            bonusBalance: true,
-        },
-    });
-    if (!wallet) {
-        return payload;
+    catch {
+        return new client_1.Prisma.Decimal(0);
     }
-    const walletSnapshot = {
-        cashBalance: wallet.cashBalance,
-        bonusBalance: wallet.bonusBalance,
-        airtimeBalance: 0,
-    };
-    if (payload && typeof payload === "object") {
-        return {
-            ...payload,
-            walletSnapshot,
-        };
-    }
-    return { walletSnapshot };
+    return new client_1.Prisma.Decimal(0);
 }
 async function getReferralCode(req, res) {
     try {
@@ -55,26 +43,6 @@ async function getReferralCode(req, res) {
         return (0, responder_1.failure)(res, "INTERNAL_ERROR", "Failed to get referral code");
     }
 }
-function toSafeNumber(value) {
-    if (typeof value === "number" && Number.isFinite(value)) {
-        return value;
-    }
-    if (typeof value === "string") {
-        const parsed = Number(value.trim());
-        return Number.isFinite(parsed) ? parsed : 0;
-    }
-    if (value instanceof client_1.Prisma.Decimal) {
-        return value.toNumber();
-    }
-    return 0;
-}
-function extractReferredUserId(meta) {
-    if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
-        return null;
-    }
-    const candidate = meta;
-    return typeof candidate.referredUserId === "string" ? candidate.referredUserId : null;
-}
 async function getReferralList(req, res) {
     try {
         const userId = getRequestUserId(req);
@@ -88,16 +56,13 @@ async function getReferralList(req, res) {
                     orderBy: { createdAt: "desc" },
                     select: {
                         id: true,
-                        username: true,
                         createdAt: true,
                         referralStatus: true,
-                    },
-                },
-                transactions: {
-                    where: { type: "REFERRAL" },
-                    select: {
-                        amount: true,
-                        meta: true,
+                        referralRewardGrantReceived: {
+                            select: {
+                                amount: true,
+                            },
+                        },
                     },
                 },
             },
@@ -105,31 +70,20 @@ async function getReferralList(req, res) {
         if (!user) {
             return (0, responder_1.failure)(res, "NOT_FOUND", "User not found");
         }
-        const rewardByReferredUserId = new Map();
-        for (const transaction of user.transactions) {
-            const referredUserId = extractReferredUserId(transaction.meta);
-            if (!referredUserId) {
-                continue;
-            }
-            rewardByReferredUserId.set(referredUserId, (rewardByReferredUserId.get(referredUserId) ?? 0) + toSafeNumber(transaction.amount));
-        }
         const referrals = user.referrals.map((referral) => {
-            const status = referral.referralStatus === "ACTIVE"
-                ? "active"
-                : referral.referralStatus === "JOINED"
-                    ? "joined"
-                    : "pending";
-            const reward = status === "active" ? rewardByReferredUserId.get(referral.id) ?? 0 : 0;
+            const referralStatus = referral.referralStatus;
+            const rewardAmount = referral.referralRewardGrantReceived?.amount.toNumber() ?? 0;
             return {
-                user: referral.username?.trim() || `User ${referral.id.slice(0, 6)}`,
-                status,
-                reward,
+                referredUserId: referral.id,
+                referralStatus,
+                rewardAmount,
+                createdAt: referral.createdAt,
             };
         });
         const totals = referrals.reduce((accumulator, referral) => {
-            if (referral.status === "active") {
+            if (referral.referralStatus === "ACTIVE") {
                 accumulator.activeReferrals += 1;
-                accumulator.totalEarned += referral.reward;
+                accumulator.totalEarned += referral.rewardAmount;
             }
             return accumulator;
         }, {
@@ -145,6 +99,54 @@ async function getReferralList(req, res) {
         return (0, responder_1.failure)(res, "INTERNAL_ERROR", "Failed to fetch referral list");
     }
 }
+async function getReferralAnalytics(req, res) {
+    try {
+        const userId = getRequestUserId(req);
+        if (!userId) {
+            return (0, responder_1.failure)(res, "UNAUTHORIZED", "Unauthorized");
+        }
+        const [totalReferrals, joinedCount, activeCount, referralRewards] = await Promise.all([
+            db_1.prisma.user.count({
+                where: {
+                    referredById: userId,
+                },
+            }),
+            db_1.prisma.user.count({
+                where: {
+                    referredById: userId,
+                    referralStatus: "JOINED",
+                },
+            }),
+            db_1.prisma.user.count({
+                where: {
+                    referredById: userId,
+                    referralStatus: "ACTIVE",
+                },
+            }),
+            db_1.prisma.auditLog.findMany({
+                where: {
+                    userId,
+                    action: "referral_reward",
+                },
+                select: {
+                    details: true,
+                },
+            }),
+        ]);
+        const totalRewardsDistributed = referralRewards.reduce((sum, entry) => sum.add(parseRewardAmount(entry.details)), new client_1.Prisma.Decimal(0));
+        const conversionRate = joinedCount > 0 ? activeCount / joinedCount : 0;
+        return (0, responder_1.success)(res, {
+            totalReferrals,
+            joinedCount,
+            activeCount,
+            conversionRate,
+            totalRewardsDistributed: totalRewardsDistributed.toString(),
+        });
+    }
+    catch {
+        return (0, responder_1.failure)(res, "INTERNAL_ERROR", "Failed to fetch referral analytics");
+    }
+}
 async function useReferralCode(req, res) {
     try {
         const userId = getRequestUserId(req);
@@ -153,14 +155,16 @@ async function useReferralCode(req, res) {
         if (!userId || !referralCode) {
             return (0, responder_1.failure)(res, "INVALID_INPUT", "Missing user or referral code");
         }
+        if (await (0, dbHealthGuard_middleware_1.rejectIfDbUnhealthy)(res)) {
+            return;
+        }
         const result = await (0, referral_service_1.applyReferralCode)({
             referredUserId: userId,
             referralCode,
             ip,
             deviceId,
         });
-        const resultWithWalletSnapshot = await ensureWalletSnapshotInResponseData(result, userId);
-        return (0, responder_1.success)(res, resultWithWalletSnapshot);
+        return (0, responder_1.success)(res, result);
     }
     catch (error) {
         if (error instanceof referral_service_1.ReferralServiceError) {

@@ -16,6 +16,12 @@ jest.mock("./suspiciousActionLog.service", () => ({
   logSuspiciousAction: jest.fn(),
 }));
 
+jest.mock("./gameConfig.service", () => ({
+  getValidatedGameConfig: jest.fn(async () => ({
+    waitlistBonus: 1000,
+  })),
+}));
+
 describe("waitlist onboarding auth", () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -34,11 +40,14 @@ describe("waitlist onboarding auth", () => {
         user: {
           create: createMock,
         },
+        suspiciousActionLog: {
+          create: jest.fn().mockResolvedValue({}),
+        },
       };
       return fn(tx);
     });
 
-    mockPrisma.user.count.mockResolvedValue(1);
+    mockPrisma.user.count.mockResolvedValue(0);
 
     const user = await findOrCreateTelegramUser("123", "john", { username: "john" }, "1.1.1.1", "d1");
 

@@ -15,6 +15,10 @@ const bootstrapFlagKey = 'boxplay_telegram_bootstrap_done';
 const referralPendingKey = 'boxplay_referral_pending_code';
 const referralAppliedKey = 'boxplay_referral_applied_code';
 
+function createBootstrapReferralIdempotencyKey(code: string) {
+  return `bootstrap_ref_${code.toUpperCase()}`;
+}
+
 type TelegramLoginData = {
   token: string;
   user: User;
@@ -126,7 +130,12 @@ export default function TelegramAuthBootstrap({ children }: { children: React.Re
       }
 
       try {
-        await applyReferralCode(pendingReferralCode, initData);
+        await applyReferralCode(
+          pendingReferralCode,
+          initData,
+          undefined,
+          createBootstrapReferralIdempotencyKey(pendingReferralCode)
+        );
         if (!cancelled) {
           localStorage.setItem(referralAppliedKey, pendingReferralCode);
           localStorage.removeItem(referralPendingKey);

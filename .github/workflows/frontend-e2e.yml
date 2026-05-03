@@ -1,0 +1,111 @@
+name: Frontend E2E & Lint
+
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+    branches: ["main", "master"]
+
+jobs:
+  e2e:
+    name: Lint, Enforce, and Playwright E2E
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install dependencies
+        working-directory: frontends
+        run: npm ci
+
+      - name: ESLint enforcement (fail fast)
+        working-directory: frontends
+        run: |
+          npm run lint
+          node scripts/enforce-fixtures-and-fetch.js
+
+      - name: Install Playwright browsers
+        working-directory: frontends
+        run: npx playwright install --with-deps
+
+      - name: Build frontend
+        working-directory: frontends
+        run: |
+          if npm run | grep -q " build"; then
+            npm run build --if-present
+          fi
+
+      - name: Run Playwright E2E tests
+        working-directory: frontends
+        env:
+          CI: true
+          PLAYWRIGHT_HEADLESS: '1'
+        run: |
+          npx playwright test --config=playwright.config.ts --reporter=html,json,line
+
+      - name: Upload Playwright HTML report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: frontends/playwright-report
+
+      - name: Upload Playwright JSON report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-json-report
+          path: frontends/test-results/report.json
+
+      - name: Upload Playwright screenshots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-screenshots
+          path: frontends/test-results/**/*.png
+
+      - name: Upload Playwright videos
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-videos
+          path: frontends/test-results/**/*.webm
+
+      - name: Upload Playwright traces
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-traces
+          path: frontends/test-results/**/*.zip
+
+      - name: Upload Playwright HAR files
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-har
+          path: frontends/test-results/**/*.har
+
+      - name: Upload Playwright console logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-console-logs
+          path: frontends/test-results/**/*.log
+
+      - name: Print duplicate API call and console error logs
+        if: failure()
+        working-directory: frontends
+        run: |
+          if [ -f test-results/duplicate-api-calls.log ]; then
+            echo "==== Duplicate API Calls ===="
+            cat test-results/duplicate-api-calls.log
+          fi
+          if [ -f test-results/console-errors.log ]; then
+            echo "==== Console Errors ===="
+            cat test-results/console-errors.log
+          fi

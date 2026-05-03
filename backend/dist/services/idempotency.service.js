@@ -8,6 +8,9 @@ const db_1 = require("../config/db");
 const client_1 = require("@prisma/client");
 const logger_1 = require("./logger");
 const IDEMPOTENCY_TTL_MS = 10 * 60 * 1000;
+const IDEMPOTENCY_PENDING_WAIT_DEFAULT_MS = 8000;
+const IDEMPOTENCY_PENDING_POLL_MS = 200;
+const IDEMPOTENCY_STALE_PENDING_MS = 5000;
 function toDecimalString(value) {
     try {
         return new client_1.Prisma.Decimal(value ?? 0).toString();
@@ -171,35 +174,84 @@ async function completeIdempotencyKey({ id, userId, response, metadata, tx, }) {
     });
     return normalizedResponse;
 }
-async function checkIdempotencyKey({ id, userId, tx, }) {
+async function checkIdempotencyKey({ id, userId, tx, waitForCompletionMs = 0, pollIntervalMs = IDEMPOTENCY_PENDING_POLL_MS, pendingStaleAfterMs = IDEMPOTENCY_STALE_PENDING_MS, recoverPending, }) {
     const client = tx || db_1.prisma;
-    const key = await client.idempotencyKey.findUnique({ where: { id } });
-    if (!key)
-        return null;
-    if (key.userId !== userId)
-        throw new Error("Idempotency key user mismatch");
-    if (key.status === "PENDING" && key.expiresAt && key.expiresAt < new Date())
-        throw new Error("Idempotency key expired");
-    if (key.status === "COMPLETED") {
-        const replayReward = toDecimalString(key.response?.data?.reward ?? key.rewardAmount);
-        await (0, logger_1.logStructuredEvent)("idempotency_hit", {
-            userId,
-            endpoint: key.action,
-            idempotencyKey: id,
-            action: key.action,
-            timestamp: new Date().toISOString(),
-        });
-        await (0, logger_1.logStructuredEvent)("idempotency_operation", {
-            userId,
-            action: "idempotency_replay",
-            reward: replayReward,
-            idempotencyKey: id,
-            timestamp: new Date().toISOString(),
-        });
-        return {
-            ...key,
-            response: normalizeIdempotencyResponse(key.response),
-        };
+    const maxWaitMs = Math.max(0, waitForCompletionMs || 0);
+    const maxDeadline = Date.now() + (maxWaitMs || IDEMPOTENCY_PENDING_WAIT_DEFAULT_MS);
+    let recoveryAttempted = false;
+    const loadKey = async () => {
+        const key = await client.idempotencyKey.findUnique({ where: { id } });
+        if (!key)
+            return null;
+        if (key.userId !== userId)
+            throw new Error("Idempotency key user mismatch");
+        if (key.status === "PENDING" && key.expiresAt && key.expiresAt < new Date()) {
+            throw new Error("Idempotency key expired");
+        }
+        if (key.status === "COMPLETED") {
+            const replayReward = toDecimalString(key.response?.data?.reward ?? key.rewardAmount);
+            await (0, logger_1.logStructuredEvent)("idempotency_hit", {
+                userId,
+                endpoint: key.action,
+                idempotencyKey: id,
+                action: key.action,
+                timestamp: new Date().toISOString(),
+            });
+            await (0, logger_1.logStructuredEvent)("idempotency_operation", {
+                userId,
+                action: "idempotency_replay",
+                reward: replayReward,
+                idempotencyKey: id,
+                timestamp: new Date().toISOString(),
+            });
+            return {
+                ...key,
+                response: normalizeIdempotencyResponse(key.response),
+            };
+        }
+        return key;
+    };
+    while (true) {
+        const key = await loadKey();
+        if (!key) {
+            return null;
+        }
+        if (key.status !== "PENDING") {
+            return key;
+        }
+        if (!maxWaitMs) {
+            return key;
+        }
+        const ageMs = Date.now() - key.createdAt.getTime();
+        if (!recoveryAttempted && recoverPending && ageMs >= pendingStaleAfterMs) {
+            recoveryAttempted = true;
+            const recovered = await recoverPending({ id, userId, key, tx });
+            if (recovered) {
+                try {
+                    await completeIdempotencyKey({
+                        id,
+                        userId,
+                        response: recovered,
+                        metadata: {
+                            action: key.action,
+                            recoveredFromPending: true,
+                        },
+                        tx,
+                    });
+                }
+                catch {
+                    // Another request may complete the key concurrently; proceed to final read.
+                }
+                const completed = await loadKey();
+                if (completed && completed.status === "COMPLETED") {
+                    return completed;
+                }
+            }
+        }
+        if (Date.now() >= maxDeadline) {
+            return key;
+        }
+        const sleepMs = Math.max(10, pollIntervalMs);
+        await new Promise((resolve) => setTimeout(resolve, sleepMs));
     }
-    return key;
 }

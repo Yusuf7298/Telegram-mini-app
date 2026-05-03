@@ -69,6 +69,7 @@ export async function logJackpotSkip(details: object) {
   });
 }
 
+
 export async function logStructuredEvent(event: string, fields: Record<string, unknown>) {
   const logFields = (fields || {}) as LogFields;
   const context = toRequiredContext(logFields, event || "unknown_action");
@@ -81,6 +82,8 @@ export async function logStructuredEvent(event: string, fields: Record<string, u
     });
   });
 }
+
+
 
 export async function logDebug(event: string, fields: Record<string, unknown> = {}) {
   const logFields = (fields || {}) as LogFields;

@@ -1,0 +1,15 @@
+// Jest Snapshot v1, https://jestjs.io/docs/snapshot-testing
+
+exports[`Referral Lifecycle Snapshot should match expected referral states 1`] = `
+[
+  {
+    "createdAt": 2026-05-02T09:03:37.741Z,
+    "deviceId": "snapshot-device-1",
+    "id": "ec0510ea-9768-4221-b6f7-32df67b8545c",
+    "inviterId": "snapshot-ref-inviter",
+    "ip": "127.0.0.1",
+    "referredUserId": "snapshot-ref-referred",
+    "suspicious": false,
+  },
+]
+`;

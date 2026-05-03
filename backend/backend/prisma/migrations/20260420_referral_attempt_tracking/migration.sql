@@ -1,0 +1,4 @@
+-- Add persistent referral attempt tracking fields.
+ALTER TABLE "User"
+  ADD COLUMN IF NOT EXISTS "referralAttempts" INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS "lastReferralAt" TIMESTAMP(3);

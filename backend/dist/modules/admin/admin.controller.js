@@ -201,7 +201,7 @@ async function updateConfig(_req, res) {
 }
 async function getAdminConfig(_req, res) {
     try {
-        const config = await (0, gameConfig_service_1.getValidatedGameConfig)();
+        const config = await (0, gameConfig_service_1.getValidatedGameConfig)({ bypassCache: true });
         return (0, responder_1.success)(res, { config });
     }
     catch (error) {
@@ -347,6 +347,28 @@ async function updateGameRewardsConfig(req, res) {
         const minBoxReward = req.body?.minBoxReward === undefined ? undefined : Number(req.body?.minBoxReward);
         const maxBoxReward = req.body?.maxBoxReward === undefined ? undefined : Number(req.body?.maxBoxReward);
         const waitlistBonus = req.body?.waitlistBonus === undefined ? undefined : Number(req.body?.waitlistBonus);
+        const maxPayoutMultiplier = req.body?.maxPayoutMultiplier === undefined
+            ? undefined
+            : parseDecimal(req.body?.maxPayoutMultiplier);
+        const minRtpModifier = req.body?.minRtpModifier === undefined
+            ? undefined
+            : parseDecimal(req.body?.minRtpModifier);
+        const maxRtpModifier = req.body?.maxRtpModifier === undefined
+            ? undefined
+            : parseDecimal(req.body?.maxRtpModifier);
+        const maxPlaysPerDay = req.body?.maxPlaysPerDay === undefined ? undefined : Number(req.body?.maxPlaysPerDay);
+        const withdrawMinPlays = req.body?.withdrawMinPlays === undefined ? undefined : Number(req.body?.withdrawMinPlays);
+        const withdrawCooldownMs = req.body?.withdrawCooldownMs === undefined ? undefined : Number(req.body?.withdrawCooldownMs);
+        const withdrawRiskThreshold = req.body?.withdrawRiskThreshold === undefined ? undefined : Number(req.body?.withdrawRiskThreshold);
+        const maxReferralsPerIpPerDay = req.body?.maxReferralsPerIpPerDay === undefined
+            ? undefined
+            : Number(req.body?.maxReferralsPerIpPerDay);
+        const waitlistRiskThreshold = req.body?.waitlistRiskThreshold === undefined ? undefined : Number(req.body?.waitlistRiskThreshold);
+        const rapidOnboardingWindowMs = req.body?.rapidOnboardingWindowMs === undefined
+            ? undefined
+            : Number(req.body?.rapidOnboardingWindowMs);
+        const minPlayIntervalMs = req.body?.minPlayIntervalMs === undefined ? undefined : Number(req.body?.minPlayIntervalMs);
+        const referralWindowMs = req.body?.referralWindowMs === undefined ? undefined : Number(req.body?.referralWindowMs);
         if (referralRewardAmount !== undefined && (!referralRewardAmount || referralRewardAmount.lte(0))) {
             return (0, responder_1.failure)(res, "INVALID_INPUT", "referralRewardAmount must be greater than 0");
         }
@@ -362,10 +384,56 @@ async function updateGameRewardsConfig(req, res) {
         if (waitlistBonus !== undefined && (!Number.isInteger(waitlistBonus) || waitlistBonus < 0)) {
             return (0, responder_1.failure)(res, "INVALID_INPUT", "waitlistBonus must be a non-negative integer");
         }
+        if (maxPayoutMultiplier !== undefined && (!maxPayoutMultiplier || maxPayoutMultiplier.lte(0))) {
+            return (0, responder_1.failure)(res, "INVALID_INPUT", "maxPayoutMultiplier must be greater than 0");
+        }
+        if (minRtpModifier !== undefined && (!minRtpModifier || minRtpModifier.lte(0))) {
+            return (0, responder_1.failure)(res, "INVALID_INPUT", "minRtpModifier must be greater than 0");
+        }
+        if (maxRtpModifier !== undefined && (!maxRtpModifier || maxRtpModifier.lte(0))) {
+            return (0, responder_1.failure)(res, "INVALID_INPUT", "maxRtpModifier must be greater than 0");
+        }
+        if (maxPlaysPerDay !== undefined && (!Number.isInteger(maxPlaysPerDay) || maxPlaysPerDay <= 0)) {
+            return (0, responder_1.failure)(res, "INVALID_INPUT", "maxPlaysPerDay must be a positive integer");
+        }
+        if (withdrawMinPlays !== undefined && (!Number.isInteger(withdrawMinPlays) || withdrawMinPlays <= 0)) {
+            return (0, responder_1.failure)(res, "INVALID_INPUT", "withdrawMinPlays must be a positive integer");
+        }
+        if (withdrawCooldownMs !== undefined && (!Number.isInteger(withdrawCooldownMs) || withdrawCooldownMs <= 0)) {
+            return (0, responder_1.failure)(res, "INVALID_INPUT", "withdrawCooldownMs must be a positive integer");
+        }
+        if (withdrawRiskThreshold !== undefined && (!Number.isInteger(withdrawRiskThreshold) || withdrawRiskThreshold < 0)) {
+            return (0, responder_1.failure)(res, "INVALID_INPUT", "withdrawRiskThreshold must be a non-negative integer");
+        }
+        if (maxReferralsPerIpPerDay !== undefined &&
+            (!Number.isInteger(maxReferralsPerIpPerDay) || maxReferralsPerIpPerDay <= 0)) {
+            return (0, responder_1.failure)(res, "INVALID_INPUT", "maxReferralsPerIpPerDay must be a positive integer");
+        }
+        if (waitlistRiskThreshold !== undefined && (!Number.isInteger(waitlistRiskThreshold) || waitlistRiskThreshold < 0)) {
+            return (0, responder_1.failure)(res, "INVALID_INPUT", "waitlistRiskThreshold must be a non-negative integer");
+        }
+        if (rapidOnboardingWindowMs !== undefined &&
+            (!Number.isInteger(rapidOnboardingWindowMs) || rapidOnboardingWindowMs <= 0)) {
+            return (0, responder_1.failure)(res, "INVALID_INPUT", "rapidOnboardingWindowMs must be a positive integer");
+        }
+        if (minPlayIntervalMs !== undefined && (!Number.isInteger(minPlayIntervalMs) || minPlayIntervalMs <= 0)) {
+            return (0, responder_1.failure)(res, "INVALID_INPUT", "minPlayIntervalMs must be a positive integer");
+        }
+        if (referralWindowMs !== undefined && (!Number.isInteger(referralWindowMs) || referralWindowMs <= 0)) {
+            return (0, responder_1.failure)(res, "INVALID_INPUT", "referralWindowMs must be a positive integer");
+        }
         const effectiveMinBoxReward = minBoxReward ?? currentConfig.minBoxReward;
         const effectiveMaxBoxReward = maxBoxReward ?? currentConfig.maxBoxReward;
         if (!(effectiveMinBoxReward < effectiveMaxBoxReward)) {
             return (0, responder_1.failure)(res, "INVALID_INPUT", "minBoxReward must be less than maxBoxReward");
+        }
+        const effectiveMinRtpModifier = minRtpModifier?.toNumber() ?? currentConfig.minRtpModifier.toNumber();
+        const effectiveMaxRtpModifier = maxRtpModifier?.toNumber() ?? currentConfig.maxRtpModifier.toNumber();
+        if (!(effectiveMinRtpModifier <= effectiveMaxRtpModifier)) {
+            return (0, responder_1.failure)(res, "INVALID_INPUT", "minRtpModifier must be less than or equal to maxRtpModifier");
+        }
+        if (!(currentConfig.rtpModifier >= effectiveMinRtpModifier && currentConfig.rtpModifier <= effectiveMaxRtpModifier)) {
+            return (0, responder_1.failure)(res, "INVALID_INPUT", "rtpModifier must remain within [minRtpModifier, maxRtpModifier]");
         }
         const config = await db_1.prisma.gameConfig.upsert({
             where: { id: "global" },
@@ -376,6 +444,18 @@ async function updateGameRewardsConfig(req, res) {
                 ...(minBoxReward !== undefined ? { minBoxReward } : {}),
                 ...(maxBoxReward !== undefined ? { maxBoxReward } : {}),
                 ...(waitlistBonus !== undefined ? { waitlistBonus } : {}),
+                ...(maxPayoutMultiplier !== undefined ? { maxPayoutMultiplier } : {}),
+                ...(minRtpModifier !== undefined ? { minRtpModifier } : {}),
+                ...(maxRtpModifier !== undefined ? { maxRtpModifier } : {}),
+                ...(maxPlaysPerDay !== undefined ? { maxPlaysPerDay } : {}),
+                ...(withdrawMinPlays !== undefined ? { withdrawMinPlays } : {}),
+                ...(withdrawCooldownMs !== undefined ? { withdrawCooldownMs } : {}),
+                ...(withdrawRiskThreshold !== undefined ? { withdrawRiskThreshold } : {}),
+                ...(maxReferralsPerIpPerDay !== undefined ? { maxReferralsPerIpPerDay } : {}),
+                ...(waitlistRiskThreshold !== undefined ? { waitlistRiskThreshold } : {}),
+                ...(rapidOnboardingWindowMs !== undefined ? { rapidOnboardingWindowMs } : {}),
+                ...(minPlayIntervalMs !== undefined ? { minPlayIntervalMs } : {}),
+                ...(referralWindowMs !== undefined ? { referralWindowMs } : {}),
             },
             update: {
                 ...(referralRewardAmount !== undefined ? { referralRewardAmount } : {}),
@@ -383,6 +463,18 @@ async function updateGameRewardsConfig(req, res) {
                 ...(minBoxReward !== undefined ? { minBoxReward } : {}),
                 ...(maxBoxReward !== undefined ? { maxBoxReward } : {}),
                 ...(waitlistBonus !== undefined ? { waitlistBonus } : {}),
+                ...(maxPayoutMultiplier !== undefined ? { maxPayoutMultiplier } : {}),
+                ...(minRtpModifier !== undefined ? { minRtpModifier } : {}),
+                ...(maxRtpModifier !== undefined ? { maxRtpModifier } : {}),
+                ...(maxPlaysPerDay !== undefined ? { maxPlaysPerDay } : {}),
+                ...(withdrawMinPlays !== undefined ? { withdrawMinPlays } : {}),
+                ...(withdrawCooldownMs !== undefined ? { withdrawCooldownMs } : {}),
+                ...(withdrawRiskThreshold !== undefined ? { withdrawRiskThreshold } : {}),
+                ...(maxReferralsPerIpPerDay !== undefined ? { maxReferralsPerIpPerDay } : {}),
+                ...(waitlistRiskThreshold !== undefined ? { waitlistRiskThreshold } : {}),
+                ...(rapidOnboardingWindowMs !== undefined ? { rapidOnboardingWindowMs } : {}),
+                ...(minPlayIntervalMs !== undefined ? { minPlayIntervalMs } : {}),
+                ...(referralWindowMs !== undefined ? { referralWindowMs } : {}),
             },
             select: {
                 id: true,
@@ -391,6 +483,18 @@ async function updateGameRewardsConfig(req, res) {
                 minBoxReward: true,
                 maxBoxReward: true,
                 waitlistBonus: true,
+                maxPayoutMultiplier: true,
+                minRtpModifier: true,
+                maxRtpModifier: true,
+                maxPlaysPerDay: true,
+                withdrawMinPlays: true,
+                withdrawCooldownMs: true,
+                withdrawRiskThreshold: true,
+                maxReferralsPerIpPerDay: true,
+                waitlistRiskThreshold: true,
+                rapidOnboardingWindowMs: true,
+                minPlayIntervalMs: true,
+                referralWindowMs: true,
             },
         });
         (0, gameConfig_service_1.invalidateGameConfigCache)();

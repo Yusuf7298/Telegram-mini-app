@@ -1,3 +1,4 @@
+import healthRoutes from './routes/health';
 import express, { NextFunction, Request, Response } from "express";
 import cors from "cors";
 import { env } from "./config/env";
@@ -11,12 +12,16 @@ import referralRoutes from "./modules/referral/referral.routes";
 import statsRoutes from "./modules/stats/stats.routes";
 import rewardsRoutes from "./modules/rewards/rewards.routes";
 import configRoutes from "./modules/config/config.routes";
+import { prisma } from "./config/db";
 import { authMiddleware } from "./middleware/auth.middleware";
 import { assertGameConfigOnStartup } from "./services/gameConfig.service";
 import { correlationIdMiddleware } from "./middleware/correlationId.middleware";
+import { globalErrorHandler } from "./middleware/errorHandler.middleware";
 
 
 const app = express();
+
+app.use(healthRoutes);
 
 const isProduction = env.NODE_ENV === "production";
 
@@ -87,6 +92,58 @@ app.get("/", (req, res) => {
   res.send("API Running 🚀");
 });
 
+const DB_HEALTH_TIMEOUT_MS = 3000;
+const DB_HEALTH_RETRIES = 2;
+const DB_HEALTH_RETRY_DELAY_MS = 250;
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function queryDbHealthWithTimeout() {
+  return Promise.race([
+    prisma.$queryRaw`SELECT 1`,
+    new Promise<never>((_resolve, reject) => {
+      setTimeout(() => reject(new Error("DB health check timed out")), DB_HEALTH_TIMEOUT_MS);
+    }),
+  ]);
+}
+
+async function checkDbHealthWithRetry() {
+  let lastError: string | null = null;
+  const totalAttempts = DB_HEALTH_RETRIES + 1;
+
+  for (let attempt = 1; attempt <= totalAttempts; attempt += 1) {
+    try {
+      await queryDbHealthWithTimeout();
+      return { ok: true as const };
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+      if (attempt < totalAttempts) {
+        await sleep(DB_HEALTH_RETRY_DELAY_MS);
+      }
+    }
+  }
+
+  return {
+    ok: false as const,
+    error: lastError ?? "DB health check failed",
+  };
+}
+
+app.get("/health/db", async (_req, res) => {
+  try {
+    const result = await checkDbHealthWithRetry();
+    if (result.ok) {
+      return res.json({ status: "ok" });
+    }
+    return res.status(500).json({ status: "fail", error: result.error });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return res.status(500).json({ status: "fail", error: message });
+  }
+});
+
 app.use("/api/auth", authRoutes);
 app.use("/api", adminRoutes);
 app.use("/api/user", authMiddleware, userRoutes);
@@ -102,24 +159,7 @@ app.get("/test", async (req, res) => {
   res.send("Working ✅");
 });
 
-app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
-  console.error(err);
-
-  const error = err as { status?: number; message?: string };
-  const status =
-    typeof error.status === "number" && error.status >= 400
-      ? error.status
-      : 500;
-  const message =
-    typeof error.message === "string" && error.message.trim().length > 0
-      ? error.message
-      : "Internal Server Error";
-
-  return res.status(status).json({
-    success: false,
-    error: message,
-  });
-});
+app.use(globalErrorHandler);
 
 const port = Number(env.PORT) || 5000;
 

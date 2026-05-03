@@ -1,5 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "../config/db";
+import { withPrismaRetry } from "./retryPrisma";
 
 type GameConfigRow = {
   id: string;
@@ -127,33 +128,35 @@ function validateGameConfigOrThrow(config: GameConfigRow): GameConfigRow {
 }
 
 async function fetchRawGameConfig(): Promise<GameConfigRow> {
-  const config = await prisma.gameConfig.findFirst({
-    where: { id: GAME_CONFIG_ID },
-    select: {
-      id: true,
-      rtpModifier: true,
-      maxPayoutMultiplier: true,
-      minRtpModifier: true,
-      maxRtpModifier: true,
-      referralRewardAmount: true,
-      freeBoxRewardAmount: true,
-      minBoxReward: true,
-      maxBoxReward: true,
-      waitlistBonus: true,
-      maxPlaysPerDay: true,
-      withdrawMinPlays: true,
-      withdrawCooldownMs: true,
-      withdrawRiskThreshold: true,
-      maxReferralsPerIpPerDay: true,
-      waitlistRiskThreshold: true,
-      rapidOnboardingWindowMs: true,
-      minPlayIntervalMs: true,
-      referralWindowMs: true,
-      dailyRewardTable: true,
-      dailyRewardBigWinThreshold: true,
-      winHistoryBigWinThreshold: true,
-    },
-  });
+  const config = await withPrismaRetry(() =>
+    prisma.gameConfig.findFirst({
+      where: { id: GAME_CONFIG_ID },
+      select: {
+        id: true,
+        rtpModifier: true,
+        maxPayoutMultiplier: true,
+        minRtpModifier: true,
+        maxRtpModifier: true,
+        referralRewardAmount: true,
+        freeBoxRewardAmount: true,
+        minBoxReward: true,
+        maxBoxReward: true,
+        waitlistBonus: true,
+        maxPlaysPerDay: true,
+        withdrawMinPlays: true,
+        withdrawCooldownMs: true,
+        withdrawRiskThreshold: true,
+        maxReferralsPerIpPerDay: true,
+        waitlistRiskThreshold: true,
+        rapidOnboardingWindowMs: true,
+        minPlayIntervalMs: true,
+        referralWindowMs: true,
+        dailyRewardTable: true,
+        dailyRewardBigWinThreshold: true,
+        winHistoryBigWinThreshold: true,
+      },
+    })
+  );
 
   if (!config) {
     throw new Error("CRITICAL: GameConfig row is missing. Refusing to continue.");

@@ -1,0 +1,11 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.shouldEvaluateReferralOnPlay = exports.isRapidOnboardingCompletion = exports.canUnlockWaitlistBonus = exports.canUseReferral = exports.canUserWithdraw = exports.isCooldownActive = exports.canUserPlay = void 0;
+var rules_service_1 = require("./rules.service");
+Object.defineProperty(exports, "canUserPlay", { enumerable: true, get: function () { return rules_service_1.canUserPlay; } });
+Object.defineProperty(exports, "isCooldownActive", { enumerable: true, get: function () { return rules_service_1.isCooldownActive; } });
+Object.defineProperty(exports, "canUserWithdraw", { enumerable: true, get: function () { return rules_service_1.canUserWithdraw; } });
+Object.defineProperty(exports, "canUseReferral", { enumerable: true, get: function () { return rules_service_1.canUseReferral; } });
+Object.defineProperty(exports, "canUnlockWaitlistBonus", { enumerable: true, get: function () { return rules_service_1.canUnlockWaitlistBonus; } });
+Object.defineProperty(exports, "isRapidOnboardingCompletion", { enumerable: true, get: function () { return rules_service_1.isRapidOnboardingCompletion; } });
+Object.defineProperty(exports, "shouldEvaluateReferralOnPlay", { enumerable: true, get: function () { return rules_service_1.shouldEvaluateReferralOnPlay; } });

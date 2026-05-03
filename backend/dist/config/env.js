@@ -5,8 +5,9 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.env = void 0;
 const dotenv_1 = __importDefault(require("dotenv"));
+const path_1 = __importDefault(require("path"));
 const zod_1 = require("zod");
-dotenv_1.default.config();
+dotenv_1.default.config({ path: path_1.default.resolve(__dirname, '../../.env') });
 const envSchema = zod_1.z.object({
     DATABASE_URL: zod_1.z.string().min(1, 'DATABASE_URL is required'),
     JWT_SECRET: zod_1.z.string().min(32, 'JWT_SECRET must be at least 32 characters'),

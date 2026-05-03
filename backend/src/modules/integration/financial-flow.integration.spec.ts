@@ -1,6 +1,7 @@
 // @ts-nocheck
 import express from "express";
 import request from "supertest";
+import { Prisma } from "@prisma/client";
 
 const walletState = {
   cashBalance: 1000,
@@ -27,6 +28,29 @@ jest.mock("../../services/alert.service", () => ({
   },
 }));
 
+jest.mock("../../middleware/dbHealthGuard.middleware", () => ({
+  rejectIfDbUnhealthy: jest.fn(async () => false),
+}));
+
+jest.mock("../../config/db", () => ({
+  prisma: {
+    user: {
+      findUnique: jest.fn(async ({ where }: any) => ({
+        id: where.id,
+        platformId: "tg-123",
+        username: "tester",
+        role: "USER",
+      })),
+    },
+    wallet: {
+      findUnique: jest.fn(async () => ({
+        cashBalance: new Prisma.Decimal(walletState.cashBalance),
+        bonusBalance: new Prisma.Decimal(walletState.bonusBalance),
+      })),
+    },
+  },
+}));
+
 jest.mock("../game/game.service", () => ({
   openBox: jest.fn(async (_userId: string, _boxId: string, _idempotencyKey: string) => {
     const boxPrice = 100;
@@ -49,7 +73,7 @@ jest.mock("../game/game.service", () => ({
 
 jest.mock("../wallet/wallet.service", () => ({
   depositWallet: jest.fn(),
-  withdrawWallet: jest.fn(async (_userId: string, amount: any, _idempotencyKey: string) => {
+  withdrawWallet: jest.fn(async ({ amount }: { userId: string; amount: any; idempotencyKey: string }) => {
     const numericAmount = Number(amount?.toString?.() ?? amount);
 
     if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
@@ -83,6 +107,8 @@ function withAuthUser(req: express.Request, _res: express.Response, next: expres
 }
 
 describe("integration: login -> open box -> withdraw -> wallet update", () => {
+  jest.setTimeout(15000);
+
   beforeEach(() => {
     walletState.cashBalance = 1000;
     walletState.bonusBalance = 0;

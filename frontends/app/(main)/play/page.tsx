@@ -12,6 +12,8 @@ import { LoadingSpinner } from "@/components/ui/LoadingSpinner";
 import { useToast } from "@/components/ui/ToastProvider";
 import { vibrate } from "@/lib/haptics";
 import { BoxData, getBoxes, openBox, OpenBoxPayload } from "@/lib/boxApi";
+import { useActionLock } from '@/hooks/useActionLock';
+import { OfflineBanner } from '@/components/ui/OfflineBanner';
 import {
   claimDailyReward,
   DailyRewardStatus,
@@ -42,7 +44,6 @@ function generateUUID() {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return crypto.randomUUID();
   }
-
   return `open_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
@@ -181,6 +182,7 @@ export default function PlayPage() {
   const cash = useWalletStore((state) => state.cashBalance);
   const bonus = useWalletStore((state) => state.bonusBalance);
   const router = useRouter();
+  const openLock = useActionLock();
   const totalWallet = useMemo(() => cash + bonus, [cash, bonus]);
   const isAnimatingOpenSequence = loading || animationPhase !== "idle";
 
@@ -505,29 +507,40 @@ export default function PlayPage() {
   };
 
   const handleOpen = async (boxIndex: number, boxId: string) => {
-    if (isAnimatingOpenSequence) {
-      return;
+    // Prevent double/rapid clicks via action lock
+    const key = `open:${boxId}`;
+    try {
+      await openLock.run(key, async () => {
+        if (isAnimatingOpenSequence) return;
+
+        const attempt: LastOpenAttempt = {
+          boxIndex,
+          payload: {
+            boxId,
+            idempotencyKey: generateUUID(),
+            timestamp: Date.now(),
+          },
+        };
+
+        setLastOpenAttempt(attempt);
+        await executeOpenBox(attempt);
+      }, { cooldownMs: 700 });
+    } catch (err) {
+      // action blocked by lock - ignore
     }
-
-    const attempt: LastOpenAttempt = {
-      boxIndex,
-      payload: {
-        boxId,
-        idempotencyKey: generateUUID(),
-        timestamp: Date.now(),
-      },
-    };
-
-    setLastOpenAttempt(attempt);
-    await executeOpenBox(attempt);
   };
 
   const handleRetryLastOpen = async () => {
-    if (!lastOpenAttempt || isAnimatingOpenSequence) {
-      return;
+    if (!lastOpenAttempt) return;
+    const key = `open:retry:${lastOpenAttempt.payload.boxId}`;
+    try {
+      await openLock.run(key, async () => {
+        if (isAnimatingOpenSequence) return;
+        await executeOpenBox(lastOpenAttempt, true);
+      }, { cooldownMs: 700 });
+    } catch (err) {
+      // ignore
     }
-
-    await executeOpenBox(lastOpenAttempt, true);
   };
 
   const handleOpenAnother = () => {
@@ -551,6 +564,7 @@ export default function PlayPage() {
 
   return (
     <div className="min-h-telegram-screen safe-screen-padding overflow-x-hidden bg-gradient-to-b from-[#0A1837] to-[#1B2B4C] p-0">
+      <OfflineBanner />
       <BigWinBanner amount={bigWinAmount} />
       <div className="mx-auto w-full max-w-md px-3 py-4 sm:px-4">
         <div className="flex items-center justify-between mb-6">

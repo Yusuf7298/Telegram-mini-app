@@ -5,6 +5,7 @@ import { Prisma } from '@prisma/client';
 import { failure, success } from "../../utils/responder";
 import { extractIdempotencyKey } from "../../utils/idempotencyKey";
 import { logError } from "../../services/logger";
+import { rejectIfDbUnhealthy } from "../../middleware/dbHealthGuard.middleware";
 
 function getRequestUserId(req: Request): string | undefined {
   return (req as Request & { userId?: string }).userId;
@@ -100,7 +101,7 @@ export async function depositToWallet(req: Request, res: Response) {
       return failure(res, "INVALID_INPUT", "idempotencyKey is required");
     }
 
-    const replaySafeResponse = await depositWallet(userId, amount, idempotencyKey) as {
+    const replaySafeResponse = await depositWallet({ userId, amount, idempotencyKey }) as {
       success: true;
       data: unknown;
       error: null;
@@ -131,7 +132,11 @@ export async function withdrawFromWallet(req: Request, res: Response) {
       return failure(res, "INVALID_INPUT", "idempotencyKey is required");
     }
 
-    const replaySafeResponse = await withdrawWallet(userId, amount, idempotencyKey) as {
+    if (await rejectIfDbUnhealthy(res)) {
+      return;
+    }
+
+    const replaySafeResponse = await withdrawWallet({ userId, amount, idempotencyKey }) as {
       success: true;
       data: unknown;
       error: null;

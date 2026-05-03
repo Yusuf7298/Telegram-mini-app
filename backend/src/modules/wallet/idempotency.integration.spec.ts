@@ -2,6 +2,28 @@
 import { Prisma } from "@prisma/client";
 import { withdrawWallet } from "./wallet.service";
 
+jest.mock("../../services/logger", () => ({
+  logStructuredEvent: jest.fn().mockResolvedValue(undefined),
+  logError: jest.fn().mockResolvedValue(undefined),
+  logJackpotSkip: jest.fn().mockResolvedValue(undefined),
+}));
+
+jest.mock("../../services/rules.service", () => ({
+  canUserWithdraw: jest.fn(async () => ({ allowed: true })),
+}));
+
+jest.mock("../../services/fraudDetection.service", () => ({
+  recordWithdrawAttempt: jest.fn(async () => ({ isSuspicious: false })),
+}));
+
+jest.mock("../../services/suspiciousActionLog.service", () => ({
+  logSuspiciousAction: jest.fn().mockResolvedValue(undefined),
+}));
+
+jest.mock("../../services/auditLog.service", () => ({
+  logAudit: jest.fn().mockResolvedValue(undefined),
+}));
+
 jest.mock("../../utils/lock", () => ({
   withUserLock: async (_userId: string, fn: () => Promise<unknown>) => fn(),
 }));
@@ -53,7 +75,7 @@ jest.mock("../../services/idempotency.service", () => ({
 
 jest.mock("../../config/db", () => ({
   prisma: {
-    $transaction: jest.fn(),
+    $transaction: jest.fn(async (fn: (tx: any) => Promise<unknown>) => fn((global as any).__TX__)),
   },
 }));
 
@@ -62,6 +84,22 @@ function d(v: number | string) {
 }
 
 function buildWalletTx(initialCash = 100, initialBonus = 0) {
+  let walletLocked = false;
+  const waitQueue: Array<() => void> = [];
+
+  const acquireWalletLock = async () => {
+    if (walletLocked) {
+      await new Promise<void>((resolve) => waitQueue.push(resolve));
+    }
+    walletLocked = true;
+  };
+
+  const releaseWalletLock = () => {
+    walletLocked = false;
+    const next = waitQueue.shift();
+    if (next) next();
+  };
+
   const state = {
     wallet: {
       userId: "user-1",
@@ -76,6 +114,10 @@ function buildWalletTx(initialCash = 100, initialBonus = 0) {
   };
 
   const tx = {
+    $executeRaw: jest.fn(async () => {
+      await acquireWalletLock();
+      return 1;
+    }),
     user: {
       findUnique: jest.fn().mockResolvedValue({
         accountStatus: "ACTIVE",
@@ -99,6 +141,18 @@ function buildWalletTx(initialCash = 100, initialBonus = 0) {
         bonusBalance: state.wallet.bonusBalance,
         bonusLocked: state.wallet.bonusLocked,
       })),
+      update: jest.fn().mockImplementation(async ({ data }: any) => {
+        state.wallet.cashBalance = data.cashBalance;
+        state.wallet.bonusBalance = data.bonusBalance;
+        state.writes.updateMany += 1;
+        releaseWalletLock();
+        return {
+          userId: state.wallet.userId,
+          cashBalance: state.wallet.cashBalance,
+          bonusBalance: state.wallet.bonusBalance,
+          bonusLocked: state.wallet.bonusLocked,
+        };
+      }),
       updateMany: jest.fn().mockImplementation(async ({ where, data }: any) => {
         const whereCash = where.cashBalance;
         const whereBonus = where.bonusBalance;
@@ -124,6 +178,7 @@ function buildWalletTx(initialCash = 100, initialBonus = 0) {
 describe("financial idempotency integration", () => {
   beforeEach(() => {
     idempotencyStore.clear();
+    delete (global as any).__TX__;
     jest.clearAllMocks();
   });
 
@@ -134,7 +189,7 @@ describe("financial idempotency integration", () => {
     const responses = [];
     for (let i = 0; i < 5; i++) {
       // same user, amount and idempotency key
-      const response = await withdrawWallet("user-1", d(10), "idem-replay-1");
+      const response = await withdrawWallet({ userId: "user-1", amount: d(10), idempotencyKey: "idem-replay-1" });
       responses.push(response);
     }
 
@@ -152,8 +207,8 @@ describe("financial idempotency integration", () => {
     (global as any).__TX__ = tx;
 
     const [a, b] = await Promise.allSettled([
-      withdrawWallet("user-1", d(80), "idem-parallel-a"),
-      withdrawWallet("user-1", d(80), "idem-parallel-b"),
+      withdrawWallet({ userId: "user-1", amount: d(80), idempotencyKey: "idem-parallel-a" }),
+      withdrawWallet({ userId: "user-1", amount: d(80), idempotencyKey: "idem-parallel-b" }),
     ]);
 
     const statuses = [a.status, b.status].sort();
@@ -164,8 +219,8 @@ describe("financial idempotency integration", () => {
     const { tx } = buildWalletTx(120, 0);
     (global as any).__TX__ = tx;
 
-    const first = await withdrawWallet("user-1", d(15), "idem-retry-1");
-    const second = await withdrawWallet("user-1", d(15), "idem-retry-1");
+    const first = await withdrawWallet({ userId: "user-1", amount: d(15), idempotencyKey: "idem-retry-1" });
+    const second = await withdrawWallet({ userId: "user-1", amount: d(15), idempotencyKey: "idem-retry-1" });
 
     expect(second).toEqual(first);
   });

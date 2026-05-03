@@ -1,0 +1,15 @@
+--- PATCH PLAN ---
+
+Goal: Add idempotency enforcement to referral activation (applyReferralCode) in backend/src/services/referral.service.ts
+
+Steps:
+1. Require idempotencyKey as argument to applyReferralCode (and propagate from controller)
+2. At the start of the transaction, check for existing idempotencyKey for this user (checkIdempotencyKey)
+3. If COMPLETED, return cached response; if PENDING, throw error; else createIdempotencyKey (status=PENDING)
+4. On success, completeIdempotencyKey with response
+5. On error, do not complete key (let it expire)
+6. Update controller to require idempotencyKey in request body and pass to service
+7. Update validator to require idempotencyKey
+
+--- END ---
+

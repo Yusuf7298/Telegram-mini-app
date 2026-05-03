@@ -33,6 +33,8 @@ async function main() {
     LEFT JOIN "ReferralRewardGrant" rg
       ON rg."referredUserId" = u.id
     WHERE u."referralStatus" = 'ACTIVE'
+      AND u."platformId" NOT LIKE 'test-%'
+      AND u."platformId" NOT LIKE 'testuser%'
     GROUP BY u.id, u."platformId", u."referralStatus"
     HAVING COUNT(rg.id) <> 1
     ORDER BY u."createdAt" DESC

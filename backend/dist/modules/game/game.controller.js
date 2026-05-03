@@ -7,6 +7,7 @@ const game_service_1 = require("./game.service");
 const db_1 = require("../../config/db");
 const responder_1 = require("../../utils/responder");
 const idempotencyKey_1 = require("../../utils/idempotencyKey");
+const dbHealthGuard_middleware_1 = require("../../middleware/dbHealthGuard.middleware");
 function getRequestUserId(req) {
     return req.userId;
 }
@@ -53,6 +54,9 @@ async function openBoxController(req, res) {
         }
         if (!idempotencyKey) {
             return (0, responder_1.failure)(res, "INVALID_INPUT", "idempotencyKey is required");
+        }
+        if (await (0, dbHealthGuard_middleware_1.rejectIfDbUnhealthy)(res)) {
+            return;
         }
         const replaySafeResponse = await (0, game_service_1.openBox)(userId, boxId, idempotencyKey, req.ip, req.headers["x-device-id"]);
         const responseDataWithWalletSnapshot = await ensureWalletSnapshotInResponseData(replaySafeResponse.data, userId);

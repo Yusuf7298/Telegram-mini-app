@@ -5,7 +5,7 @@ const gameConfig_service_1 = require("../../services/gameConfig.service");
 const responder_1 = require("../../utils/responder");
 async function getGameConfig(_req, res) {
     try {
-        const config = await (0, gameConfig_service_1.getValidatedGameConfig)();
+        const config = await (0, gameConfig_service_1.getValidatedGameConfig)({ bypassCache: true });
         return (0, responder_1.success)(res, config);
     }
     catch {

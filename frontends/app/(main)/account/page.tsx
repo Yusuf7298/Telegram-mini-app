@@ -1,6 +1,8 @@
 "use client";
 import Image from 'next/image';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useLoadingState } from '@/hooks/useLoadingState';
+import { FallbackError } from '@/components/ui/FallbackError';
 import { ArrowLeft, Bell, Copy, Settings, Share2, UserPlus } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/store/authStore';
@@ -18,7 +20,12 @@ const REFERRAL_SHARE_TEXT = 'Join this game and get free rewards 🎁';
 const REFERRAL_POLL_INTERVAL_MS = 20000;
 
 function toNormalizedStatus(value: string) {
-  return value.toUpperCase();
+  const normalized = String(value ?? '').toUpperCase();
+  if (normalized === 'PENDING' || normalized === 'JOINED' || normalized === 'ACTIVE') {
+    return normalized;
+  }
+
+  return 'PENDING';
 }
 
 export default function AccountPage() {
@@ -29,7 +36,8 @@ export default function AccountPage() {
   const [referrals, setReferrals] = useState<ReferralListItem[]>([]);
   const [activeReferrals, setActiveReferrals] = useState(0);
   const [totalEarned, setTotalEarned] = useState(0);
-  const [referralError, setReferralError] = useState<string | null>(null);
+  const referralListLoading = useLoadingState<ReferralListData>();
+  const [retryingReferrals, setRetryingReferrals] = useState(false);
   const { showToast } = useToast();
   const addNotification = useNotificationStore((state) => state.addNotification);
   const fetchWallet = useWalletStore((state) => state.fetchWallet);
@@ -99,11 +107,17 @@ export default function AccountPage() {
 
       try {
         const response = await getReferralList(telegramInitData);
-        const payload: ReferralListData = response.data.data;
+        const payload: ReferralListData = response?.data?.data ?? {
+          referrals: [],
+          totals: {
+            activeReferrals: 0,
+            totalEarned: 0,
+          },
+        };
 
         setReferrals(payload.referrals);
-        setActiveReferrals(payload.totals.activeReferrals);
-        setTotalEarned(payload.totals.totalEarned);
+        setActiveReferrals(Number.isFinite(payload.totals.activeReferrals) ? payload.totals.activeReferrals : 0);
+        setTotalEarned(Number.isFinite(payload.totals.totalEarned) ? payload.totals.totalEarned : 0);
 
         const nextStatusByUser = payload.referrals.reduce<Record<string, string>>((acc, referral) => {
           const userKey = referral.referredUserId;
@@ -139,6 +153,10 @@ export default function AccountPage() {
         prevStatusByUserRef.current = nextStatusByUser;
         hasBootstrappedReferralsRef.current = true;
       } catch (error) {
+        if (options?.silent) {
+          return;
+        }
+
         const message =
           typeof error === 'object' && error !== null && 'message' in error
             ? String((error as { message?: unknown }).message ?? 'Failed to fetch referral data')
@@ -157,9 +175,26 @@ export default function AccountPage() {
     [addNotification, showToast]
   );
 
+  const handleRetryReferralData = async () => {
+    if (retryingReferrals) {
+      return;
+    }
+
+    setRetryingReferrals(true);
+    try {
+      await refreshReferralData();
+    } finally {
+      setRetryingReferrals(false);
+    }
+  };
+
   useEffect(() => {
     void fetchWallet();
   }, [fetchWallet]);
+
+  useEffect(() => {
+    void refreshReferralData();
+  }, [refreshReferralData]);
 
   useVisibilityPolling(
     useCallback(() => {
@@ -386,9 +421,7 @@ export default function AccountPage() {
               Loading referral table...
             </div>
           ) : referralError ? (
-            <div className="rounded-[24px] border border-white/10 bg-[#111a30] px-4 py-6 text-sm text-red-300">
-              {referralError}
-            </div>
+            <FallbackError message={referralError} onRetry={handleRetryReferralData} />
           ) : (
             <ReferralList referrals={referrals} />
           )}

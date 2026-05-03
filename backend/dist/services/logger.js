@@ -5,14 +5,20 @@ exports.logStructuredEvent = logStructuredEvent;
 exports.logDebug = logDebug;
 exports.logError = logError;
 const env_1 = require("../config/env");
+const requestContext_service_1 = require("./requestContext.service");
 function toRequiredContext(fields, fallbackAction) {
     const userId = typeof fields.userId === "string" && fields.userId.trim() ? fields.userId : "unknown";
     const endpoint = typeof fields.endpoint === "string" && fields.endpoint.trim() ? fields.endpoint : "unknown";
     const action = typeof fields.action === "string" && fields.action.trim() ? fields.action : fallbackAction;
+    const correlationIdField = fields.correlationId;
+    const correlationId = typeof correlationIdField === "string" && correlationIdField.trim()
+        ? correlationIdField
+        : (0, requestContext_service_1.getCorrelationId)() ?? "unknown";
     return {
         userId,
         endpoint,
         action,
+        correlationId,
     };
 }
 function writeLog(level, payload) {

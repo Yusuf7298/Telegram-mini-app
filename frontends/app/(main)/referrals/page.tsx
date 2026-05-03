@@ -1,5 +1,7 @@
 "use client";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useLoadingState } from '@/hooks/useLoadingState';
+import { FallbackError } from '@/components/ui/FallbackError';
 import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
 import { useToast } from '@/components/ui/ToastProvider';
 import { applyReferralCode, getReferralCode, getReferralList, ReferralListData, ReferralListItem } from "@/lib/referralApi";
@@ -10,6 +12,8 @@ import { useWalletStore } from '@/store/walletStore';
 import { getGameConfig } from "@/lib/gameConfigApi";
 import { ReferralList } from "@/components/referral/ReferralList";
 import { useVisibilityPolling } from '@/hooks/useVisibilityPolling';
+import { useActionLock } from '@/hooks/useActionLock';
+import { OfflineBanner } from '@/components/ui/OfflineBanner';
 
 type ReferralRetryAttempt = {
   code: string;
@@ -25,7 +29,12 @@ function createIdempotencyKey() {
 }
 
 function toNormalizedStatus(value: string) {
-  return value.toUpperCase();
+  const normalized = String(value ?? '').toUpperCase();
+  if (normalized === 'PENDING' || normalized === 'JOINED' || normalized === 'ACTIVE') {
+    return normalized;
+  }
+
+  return 'PENDING';
 }
 
 const REFERRAL_SHARE_TEXT = 'Join this game and get free rewards 🎁';
@@ -36,9 +45,10 @@ export default function ReferralsPage() {
   const [referralCode, setReferralCode] = useState("");
   const [codeInput, setCodeInput] = useState("");
   const [copied, setCopied] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [loadingReferrals, setLoadingReferrals] = useState(true);
-  const [submitting, setSubmitting] = useState(false);
+  const referralCodeLoading = useLoadingState();
+  const referralListLoading = useLoadingState();
+  const applyReferralLoading = useLoadingState();
+  const referralLock = useActionLock();
   const [retryingReferral, setRetryingReferral] = useState(false);
   const [applyError, setApplyError] = useState<string | null>(null);
   const [lastAttempt, setLastAttempt] = useState<ReferralRetryAttempt | null>(null);
@@ -47,6 +57,8 @@ export default function ReferralsPage() {
   const [referralMilestoneBonus, setReferralMilestoneBonus] = useState<number | null>(null);
   const [referrals, setReferrals] = useState<ReferralListItem[]>([]);
   const [referralError, setReferralError] = useState<string | null>(null);
+  const [retryingList, setRetryingList] = useState(false);
+  const [codeError, setCodeError] = useState<string | null>(null);
   const { showToast } = useToast();
   const addNotification = useNotificationStore((state) => state.addNotification);
   const updateWalletFromResponse = useWalletStore((state) => state.updateWalletFromResponse);
@@ -97,100 +109,76 @@ export default function ReferralsPage() {
     const telegramInitData = getTelegramInitData();
     setInitData(telegramInitData);
 
-    const loadReferralCode = async () => {
+    referralCodeLoading.run(async () => {
       if (!telegramInitData) {
         showToast({ type: 'error', message: 'Telegram session is required to load referral data' });
-        setLoading(false);
+        setCodeError('Telegram session is required');
         return;
       }
-
-      setLoading(true);
-
-      try {
-        const response = await getReferralCode(telegramInitData);
-        setReferralCode(response.data.data.referralCode);
-      } catch (requestError) {
-        void requestError;
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    void loadReferralCode();
+      setCodeError(null);
+      const response = await getReferralCode(telegramInitData);
+      const safeCode = typeof response?.data?.data?.referralCode === 'string' ? response.data.data.referralCode.trim() : '';
+      setReferralCode(safeCode);
+    }).catch(() => setCodeError('Failed to load referral code'));
   }, []);
 
   const refreshReferralData = useCallback(
     async (options?: { silent?: boolean }) => {
       if (!initData) {
         if (!options?.silent) {
-          setLoadingReferrals(false);
-          setReferralError('Telegram session is required to load referral data');
+          referralListLoading.run(() => Promise.reject(new Error('Telegram session is required to load referral data')));
         }
         return;
       }
-
       if (!options?.silent) {
-        setLoadingReferrals(true);
-        setReferralError(null);
-      }
-
-      try {
-        const response = await getReferralList(initData);
-        const payload: ReferralListData = response.data.data;
-
-        setReferrals(payload.referrals);
-
-        const nextStatusByUser = payload.referrals.reduce<Record<string, string>>((acc, referral) => {
-          const userKey = referral.referredUserId;
-          acc[userKey] = toNormalizedStatus(referral.referralStatus);
-          return acc;
-        }, {});
-
-        if (hasBootstrappedReferralsRef.current) {
-          payload.referrals.forEach((referral) => {
+        referralListLoading.run(async () => {
+          const response = await getReferralList(initData);
+          const payload: ReferralListData = response?.data?.data ?? {
+            referrals: [],
+            totals: { activeReferrals: 0, totalEarned: 0 },
+          };
+          setReferrals(payload.referrals);
+          const nextStatusByUser = payload.referrals.reduce<Record<string, string>>((acc, referral) => {
             const userKey = referral.referredUserId;
-            const currentStatus = toNormalizedStatus(referral.referralStatus);
-            const previousStatus = prevStatusByUserRef.current[userKey];
-            const label = referral.user?.trim() || `User ${userKey.slice(0, 6)}`;
-
-            // Notify only on true activation transition
-            if (
-              previousStatus === 'JOINED' &&
-              currentStatus === 'ACTIVE' &&
-              !activeNotificationSentRef.current[userKey]
-            ) {
-              activeNotificationSentRef.current[userKey] = true;
-              const rewardText = `₦${referral.rewardAmount.toLocaleString()}`;
-              addNotification({
-                kind: 'referral',
-                title: 'Referral became ACTIVE',
-                message: `${label} is now ACTIVE. Reward earned: ${rewardText}.`,
-              });
-              showToast({ type: 'success', message: `${label} became ACTIVE. Reward ${rewardText}` });
-            }
-          });
-        }
-
-        prevStatusByUserRef.current = nextStatusByUser;
-        hasBootstrappedReferralsRef.current = true;
-      } catch (error) {
-        const message =
-          typeof error === 'object' && error !== null && 'message' in error
-            ? String((error as { message?: unknown }).message ?? 'Failed to load referral statuses')
-            : 'Failed to load referral statuses';
-
-        setReferralError(message);
-        if (!options?.silent) {
-          showToast({ type: 'error', message });
-        }
-      } finally {
-        if (!options?.silent) {
-          setLoadingReferrals(false);
-        }
+            acc[userKey] = toNormalizedStatus(referral.referralStatus);
+            return acc;
+          }, {});
+          if (hasBootstrappedReferralsRef.current) {
+            payload.referrals.forEach((referral) => {
+              const userKey = referral.referredUserId;
+              const currentStatus = toNormalizedStatus(referral.referralStatus);
+              const previousStatus = prevStatusByUserRef.current[userKey];
+              const label = referral.user?.trim() || `User ${userKey.slice(0, 6)}`;
+              if (
+                previousStatus === 'JOINED' &&
+                currentStatus === 'ACTIVE' &&
+                !activeNotificationSentRef.current[userKey]
+              ) {
+                activeNotificationSentRef.current[userKey] = true;
+                const rewardText = `₦${referral.rewardAmount.toLocaleString()}`;
+                addNotification({
+                  kind: 'referral',
+                  title: 'Referral became ACTIVE',
+                  message: `${label} is now ACTIVE. Reward earned: ${rewardText}.`,
+                });
+                showToast({ type: 'success', message: `${label} became ACTIVE. Reward ${rewardText}` });
+              }
+            });
+          }
+          prevStatusByUserRef.current = nextStatusByUser;
+          hasBootstrappedReferralsRef.current = true;
+        }).catch((error) => {
+          setReferralError(error?.message || 'Failed to load referral statuses');
+          showToast({ type: 'error', message: error?.message || 'Failed to load referral statuses' });
+        });
       }
     },
-    [addNotification, initData, showToast]
+    [addNotification, initData, showToast, referralListLoading]
   );
+
+  const handleRetryReferralList = async () => {
+    await refreshReferralData();
+  };
 
   useVisibilityPolling(
     useCallback(() => {
@@ -216,6 +204,15 @@ export default function ReferralsPage() {
       window.removeEventListener('referrals:refresh', handleReferralRefresh as EventListener);
     };
   }, [refreshReferralData]);
+
+  useEffect(() => {
+    if (!initData) {
+      setLoadingReferrals(false);
+      return;
+    }
+
+    void refreshReferralData();
+  }, [initData, refreshReferralData]);
 
   useEffect(() => {
     const loadGameConfig = async () => {
@@ -352,30 +349,33 @@ export default function ReferralsPage() {
   };
 
   const executeApplyReferral = async (attempt: ReferralRetryAttempt, isRetry = false) => {
-    if (submitting) return;
-
-    setSubmitting(true);
+    if (applyReferralLoading.loading) return;
+    if (!initData) {
+      setApplyError('Telegram session is required');
+      showToast({ type: 'error', message: 'Telegram session is required' });
+      return;
+    }
     setRetryingReferral(isRetry);
     setApplyError(null);
-
     try {
-      const response = await applyReferralCode(attempt.code, initData as string, undefined, attempt.idempotencyKey);
-      const updated = updateWalletFromResponse(response.data);
-      if (!updated) {
-        await fetchWallet();
-      }
-
-      showToast({ type: 'success', message: 'Referral code applied successfully' });
-      addNotification({
-        kind: 'referral',
-        title: 'Referral activated',
-        message: `You successfully activated referral code ${attempt.code}.`,
+      await applyReferralLoading.run(async () => {
+        const response = await applyReferralCode(attempt.code, initData, undefined, attempt.idempotencyKey);
+        const updated = updateWalletFromResponse(response.data);
+        if (!updated) {
+          await fetchWallet();
+        }
+        showToast({ type: 'success', message: 'Referral code applied successfully' });
+        addNotification({
+          kind: 'referral',
+          title: 'Referral activated',
+          message: `You successfully activated referral code ${attempt.code}.`,
+        });
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('referrals:refresh'));
+        }
+        setCodeInput("");
+        setLastAttempt(null);
       });
-      if (typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent('referrals:refresh'));
-      }
-      setCodeInput("");
-      setLastAttempt(null);
     } catch (requestError) {
       const message =
         typeof requestError === 'object' && requestError !== null && 'message' in requestError
@@ -384,36 +384,39 @@ export default function ReferralsPage() {
       setApplyError(message);
       setLastAttempt(attempt);
     } finally {
-      setSubmitting(false);
       setRetryingReferral(false);
     }
   };
 
   const handleApplyReferral = async (event: FormEvent) => {
     event.preventDefault();
-
     if (!initData) {
       showToast({ type: 'error', message: 'Telegram session is required' });
       return;
     }
-
     const code = codeInput.trim();
     if (!code) {
       showToast({ type: 'info', message: 'Enter a referral code' });
       return;
     }
-
     const attempt: ReferralRetryAttempt = {
       code,
       idempotencyKey: createIdempotencyKey(),
     };
-
-    await executeApplyReferral(attempt);
+    try {
+      await referralLock.run(`ref:${attempt.code}`, async () => await executeApplyReferral(attempt), { cooldownMs: 1000 });
+    } catch (err) {
+      // action blocked or already running; executeApplyReferral handles errors
+    }
   };
 
   const handleRetryReferral = async () => {
-    if (!lastAttempt || submitting) return;
-    await executeApplyReferral(lastAttempt, true);
+    if (!lastAttempt || applyReferralLoading.loading) return;
+    try {
+      await referralLock.run(`ref:retry:${lastAttempt.code}`, async () => await executeApplyReferral(lastAttempt, true), { cooldownMs: 1000 });
+    } catch (err) {
+      // ignore
+    }
   };
 
   const totalReferralsCount = referrals.length;
@@ -438,12 +441,13 @@ export default function ReferralsPage() {
 
   return (
     <div className="min-h-telegram-screen safe-screen-padding bg-gradient-to-b from-[#0b1526] to-[#08101d] px-4 py-6 flex flex-col items-center overflow-x-hidden">
+      <OfflineBanner />
       {/* Referral Code Card */}
       <div className="mt-2 mb-4 flex w-full max-w-sm flex-col items-center rounded-2xl bg-[#101B2A] p-5 shadow-lg sm:p-6">
         <div className="mb-2 w-full text-left text-lg font-bold text-white">Your Referral Code</div>
         <div className="mb-4 w-full">
           <span className="flex min-h-[44px] w-full items-center justify-center rounded-lg bg-[#232B3C] px-4 py-2 text-base font-mono tracking-widest text-blue-400 sm:text-lg">
-            {loading ? (
+            {referralCodeLoading.loading ? (
               <span className="flex items-center gap-2 text-sm text-blue-300">
                 <LoadingSpinner />
                 Loading...
@@ -451,6 +455,7 @@ export default function ReferralsPage() {
             ) : (referralCode || "Unavailable")}
           </span>
         </div>
+        {codeError ? <p className="mb-2 w-full text-left text-xs text-red-300">{codeError}</p> : null}
 
         <div className="mb-2 w-full text-left text-sm font-semibold text-white/90">Your Invite Link</div>
         <div className="w-full rounded-lg bg-[#19233A] border border-[#232B3C] px-3 py-3 text-xs text-blue-200 break-all">
@@ -462,7 +467,7 @@ export default function ReferralsPage() {
           onClick={() => {
             void handleInviteClick();
           }}
-          disabled={loading || !referralCode}
+          disabled={referralCodeLoading.loading || !referralCode}
         >
           Invite & Earn Rewards
         </button>
@@ -479,7 +484,7 @@ export default function ReferralsPage() {
             onClick={() => {
               void handleCopyInviteLink();
             }}
-            disabled={loading || !referralCode}
+            disabled={referralCodeLoading.loading || !referralCode}
             aria-label="Copy invite link"
           >
             {copied ? "Copied!" : "Copy"}
@@ -489,7 +494,7 @@ export default function ReferralsPage() {
             onClick={() => {
               void handleTelegramShare();
             }}
-            disabled={loading || !telegramShareUrl}
+            disabled={referralCodeLoading.loading || !telegramShareUrl}
             aria-label="Share invite link on Telegram"
           >
             Telegram
@@ -499,7 +504,7 @@ export default function ReferralsPage() {
             onClick={() => {
               void handleWhatsAppShare();
             }}
-            disabled={loading || !whatsappShareUrl}
+            disabled={referralCodeLoading.loading || !whatsappShareUrl}
             aria-label="Share invite link on WhatsApp"
           >
             WhatsApp
@@ -530,9 +535,9 @@ export default function ReferralsPage() {
           <button
             type="submit"
             className="mt-3 min-h-[44px] w-full rounded-lg bg-blue-600 px-3 py-3 text-sm font-semibold text-white transition hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 disabled:cursor-not-allowed disabled:opacity-60"
-            disabled={submitting || loading || !initData}
+            disabled={applyReferralLoading.loading || referralCodeLoading.loading || !initData}
           >
-            {submitting ? "Applying..." : "Apply Referral"}
+            {applyReferralLoading.loading ? "Applying..." : "Apply Referral"}
           </button>
         </form>
 
@@ -542,12 +547,10 @@ export default function ReferralsPage() {
             <button
               type="button"
               className="min-h-[44px] w-full rounded-lg bg-white/10 px-3 py-3 text-sm font-semibold text-white transition hover:bg-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/50 disabled:cursor-not-allowed disabled:opacity-60"
-              disabled={submitting}
-              onClick={() => {
-                void handleRetryReferral();
-              }}
+              disabled={applyReferralLoading.loading}
+              onClick={() => { void handleRetryReferral(); }}
             >
-              {retryingReferral ? 'Retrying...' : 'Retry'}
+              {applyReferralLoading.loading || retryingReferral ? 'Retrying...' : 'Retry'}
             </button>
           </div>
         ) : null}
@@ -599,13 +602,13 @@ export default function ReferralsPage() {
 
       <div className="mb-4 flex w-full max-w-sm flex-col rounded-2xl bg-[#101B2A] p-4 shadow-lg sm:p-5">
         <div className="mb-3 text-lg font-bold text-white">Referral Status</div>
-        {loadingReferrals ? (
+        {referralListLoading.loading ? (
           <div className="flex items-center gap-2 rounded-lg bg-[#19233A] p-3 text-sm text-white/80">
             <LoadingSpinner />
             Loading referral statuses...
           </div>
-        ) : referralError ? (
-          <div className="rounded-lg bg-[#19233A] p-3 text-sm text-red-300">{referralError}</div>
+        ) : referralListLoading.error || referralError ? (
+          <FallbackError message={referralListLoading.error?.message || referralError} code={referralListLoading.error?.code} onRetry={handleRetryReferralList} />
         ) : (
           <ReferralList referrals={referrals} />
         )}

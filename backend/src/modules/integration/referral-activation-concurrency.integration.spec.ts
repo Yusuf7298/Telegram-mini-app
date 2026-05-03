@@ -35,10 +35,57 @@ jest.mock("../../services/bonus.service", () => ({
   trackBonusUsage: jest.fn().mockResolvedValue(undefined),
 }));
 
-jest.mock("../../services/referral.service", () => ({
-  logReferral: jest.fn().mockResolvedValue(undefined),
-  checkReferralLimits: jest.fn().mockResolvedValue(true),
-}));
+jest.mock("../../services/referral.service", () => {
+  const actual = jest.requireActual("../../services/referral.service");
+  return {
+    ...actual,
+    logReferral: jest.fn().mockResolvedValue(undefined),
+    checkReferralLimits: jest.fn().mockResolvedValue(true),
+    activateReferralFromJoinedToActive: jest.fn(async ({ referredUserId, tx, rewardAmount, sourceAction }: any) => {
+      const referredUser = await tx.user.findUnique({
+        where: { id: referredUserId },
+        select: { referredById: true, referralStatus: true },
+      });
+
+      if (!referredUser?.referredById || referredUser.referralStatus !== "JOINED") {
+        return null;
+      }
+
+      const inviterId = referredUser.referredById;
+      const existingGrant = await tx.referralRewardGrant.findUnique({
+        where: { referredUserId },
+      });
+      if (existingGrant) {
+        return { referralGrantId: existingGrant.id, referralTransactionId: `tx-${referredUserId}` };
+      }
+
+      await tx.referralRewardGrant.create({
+        data: {
+          inviterId,
+          referredUserId,
+          amount: rewardAmount,
+          sourceAction,
+        },
+      });
+      await tx.wallet.update({
+        where: { userId: inviterId },
+        data: { cashBalance: { increment: rewardAmount } },
+      });
+      await tx.transaction.create({
+        data: {
+          userId: inviterId,
+          type: "REFERRAL",
+          amount: rewardAmount,
+          balanceBefore: new Prisma.Decimal(0),
+          balanceAfter: rewardAmount,
+          meta: { referredUserId },
+        },
+      });
+
+      return { referralGrantId: `grant-${referredUserId}`, referralTransactionId: `tx-${referredUserId}` };
+    }),
+  };
+});
 
 jest.mock("../../services/requestContext.service", () => ({
   getCorrelationId: jest.fn(() => "sim-correlation-id"),
@@ -56,8 +103,12 @@ jest.mock("../../services/rules.service", () => ({
   isCooldownActive: jest.fn(async () => ({ active: false, elapsedMs: 0, cooldownMs: 0 })),
   canUnlockWaitlistBonus: jest.fn(async () => false),
   isRapidOnboardingCompletion: jest.fn(async () => false),
-  shouldEvaluateReferralOnPlay: jest.fn(() => false),
+  shouldEvaluateReferralOnPlay: jest.fn(() => true),
   canActivateReferral: jest.fn((referral: { status: string }) => referral.status === "JOINED"),
+}));
+
+jest.mock("../../config/featureFlags", () => ({
+  isFeatureEnabled: jest.fn(async () => true),
 }));
 
 jest.mock("../../services/reward.service", () => ({

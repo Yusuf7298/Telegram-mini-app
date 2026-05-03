@@ -1,6 +1,6 @@
 require("dotenv").config();
-const { PrismaClient, Prisma } = require("@prisma/client");
-const { PrismaPg } = require("@prisma/adapter-pg");
+const { Prisma } = require("@prisma/client");
+const { prisma } = require("./dist/config/db");
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 
@@ -9,9 +9,6 @@ function wait(ms) {
 }
 
 async function main() {
-  const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
-  const prisma = new PrismaClient({ adapter });
-
   try {
     const base = "http://127.0.0.1:5000/api";
     const platformId = `openbox-paced-${Date.now()}`;

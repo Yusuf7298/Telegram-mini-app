@@ -1,13 +1,4 @@
-import { PrismaClient } from "@prisma/client";
-import { PrismaPg } from "@prisma/adapter-pg";
-import { env } from "../../src/config/env";
-
-const connectionString = env.DATABASE_URL;
-if (!connectionString) {
-  throw new Error("DATABASE_URL is not set");
-}
-const adapter = new PrismaPg({ connectionString });
-const prisma = new PrismaClient({ adapter });
+import { prisma } from "../../src/config/db";
 async function main() {
   await prisma.box.createMany({
     data: [

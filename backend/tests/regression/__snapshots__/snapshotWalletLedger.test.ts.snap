@@ -1,0 +1,28 @@
+// Jest Snapshot v1, https://jestjs.io/docs/snapshot-testing
+
+exports[`Wallet Ledger Snapshot should match expected wallet ledger consistency 1`] = `
+[
+  {
+    "amount": "-100",
+    "balanceAfter": "900",
+    "balanceBefore": "1000",
+    "boxId": null,
+    "createdAt": 2026-05-02T09:03:32.585Z,
+    "id": "af93d342-8b5f-4032-987b-d7583b7e451f",
+    "meta": null,
+    "type": "BOX_PURCHASE",
+    "userId": "snapshot-wallet-user",
+  },
+  {
+    "amount": "120",
+    "balanceAfter": "1020",
+    "balanceBefore": "900",
+    "boxId": null,
+    "createdAt": 2026-05-02T09:03:32.585Z,
+    "id": "500be88c-dc56-4199-b690-6ee4ff6f3f36",
+    "meta": null,
+    "type": "BOX_REWARD",
+    "userId": "snapshot-wallet-user",
+  },
+]
+`;

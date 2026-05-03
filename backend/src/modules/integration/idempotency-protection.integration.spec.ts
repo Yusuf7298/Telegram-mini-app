@@ -33,10 +33,61 @@ jest.mock("../../services/bonus.service", () => ({
   trackBonusUsage: jest.fn().mockResolvedValue(undefined),
 }));
 
-jest.mock("../../services/referral.service", () => ({
-  logReferral: jest.fn().mockResolvedValue(undefined),
-  checkReferralLimits: jest.fn().mockResolvedValue(true),
-}));
+jest.mock("../../services/referral.service", () => {
+  const actual = jest.requireActual("../../services/referral.service");
+  return {
+    ...actual,
+    logReferral: jest.fn().mockResolvedValue(undefined),
+    checkReferralLimits: jest.fn().mockResolvedValue(true),
+    activateReferralFromJoinedToActive: jest.fn(async ({ referredUserId, tx, rewardAmount, sourceAction }: any) => {
+      const referredUser = await tx.user.findUnique({
+        where: { id: referredUserId },
+        select: { referredById: true, referralStatus: true },
+      });
+
+      if (!referredUser?.referredById || referredUser.referralStatus !== "JOINED") {
+        return null;
+      }
+
+      const inviterId = referredUser.referredById;
+      const existingGrant = await tx.referralRewardGrant.findUnique({
+        where: { referredUserId },
+      });
+      if (existingGrant) {
+        return { referralGrantId: existingGrant.id, referralTransactionId: `tx-${referredUserId}` };
+      }
+
+      await tx.referralRewardGrant.create({
+        data: {
+          inviterId,
+          referredUserId,
+          amount: rewardAmount,
+          sourceAction,
+        },
+      });
+      await tx.wallet.update({
+        where: { userId: inviterId },
+        data: { cashBalance: { increment: rewardAmount } },
+      });
+      await tx.transaction.create({
+        data: {
+          userId: inviterId,
+          type: "REFERRAL",
+          amount: rewardAmount,
+          balanceBefore: new Prisma.Decimal(0),
+          balanceAfter: rewardAmount,
+          meta: { referredUserId },
+        },
+      });
+      await tx.user.updateMany({
+        where: { id: referredUserId, referralStatus: "JOINED" },
+        data: { referralStatus: "ACTIVE", referralActivatedAt: new Date() },
+      });
+
+      return { referralGrantId: `grant-${referredUserId}`, referralTransactionId: `tx-${referredUserId}` };
+    }),
+  };
+});
 
 jest.mock("../../services/requestContext.service", () => ({
   getCorrelationId: jest.fn(() => "idem-test-correlation-id"),
@@ -54,10 +105,14 @@ jest.mock("../../services/rules.service", () => ({
   isCooldownActive: jest.fn(async () => ({ active: false, elapsedMs: 0, cooldownMs: 0 })),
   canUnlockWaitlistBonus: jest.fn(async () => false),
   isRapidOnboardingCompletion: jest.fn(async () => false),
-  shouldEvaluateReferralOnPlay: jest.fn(() => false),
+  shouldEvaluateReferralOnPlay: jest.fn(() => true),
   canActivateReferral: jest.fn((referral: { status: string }) => referral.status === "JOINED"),
   canUserWithdraw: jest.fn(async () => ({ allowed: true })),
   canUseReferral: jest.fn(async () => true),
+}));
+
+jest.mock("../../config/featureFlags", () => ({
+  isFeatureEnabled: jest.fn(async () => true),
 }));
 
 jest.mock("../../services/reward.service", () => ({
@@ -158,6 +213,13 @@ jest.mock("../../services/idempotency.service", () => ({
 jest.mock("../../config/db", () => ({
   prisma: {
     $transaction: jest.fn(async (cb: any) => cb((global as any).__TX__)),
+    user: {
+      findUnique: jest.fn(async ({ where }: any) => ({
+        id: where.id,
+        referredById: "inviter-1",
+        referralStatus: "JOINED",
+      })),
+    },
   },
 }));
 
@@ -205,7 +267,8 @@ function createTx() {
       price: d(100),
       rewardTable: [],
     },
-    referralGrantRows: [] as Array<{ referrerId: string; referredUserId: string; amount: Prisma.Decimal }>,
+    referralGrantRows: [] as Array<{ inviterId: string; referredUserId: string; amount: Prisma.Decimal }>,
+    referralRows: [] as Array<{ id: string; amount: Prisma.Decimal; referredUserId: string; createdAt: Date }>,
     writes: {
       inviterCredits: 0,
       referralTransactions: 0,
@@ -321,7 +384,22 @@ function createTx() {
     referralRewardGrant: {
       findUnique: jest.fn(async ({ where }: any) => {
         const grant = state.referralGrantRows.find((row) => row.referredUserId === where.referredUserId);
-        return grant ? { id: `grant-${grant.referredUserId}` } : null;
+        return grant ? { id: `grant-${grant.referredUserId}`, amount: grant.amount } : null;
+      }),
+      createMany: jest.fn(async ({ data }: any) => {
+        const row = data[0];
+        const existing = state.referralGrantRows.find((item) => item.referredUserId === row.referredUserId);
+        if (existing) {
+          return { count: 0 };
+        }
+
+        state.referralGrantRows.push({
+          inviterId: row.inviterId,
+          referredUserId: row.referredUserId,
+          amount: row.amount,
+        });
+
+        return { count: 1 };
       }),
       create: jest.fn(async ({ data }: any) => {
         const existing = state.referralGrantRows.find((row) => row.referredUserId === data.referredUserId);
@@ -332,7 +410,7 @@ function createTx() {
         }
 
         state.referralGrantRows.push({
-          referrerId: data.referrerId,
+          inviterId: data.inviterId,
           referredUserId: data.referredUserId,
           amount: data.amount,
         });
@@ -359,17 +437,30 @@ function createTx() {
     },
     transaction: {
       create: jest.fn(async ({ data }: any) => {
+        let createdId = `tx-${state.writes.referralTransactions}`;
         if (data.type === "REFERRAL" && data.userId === state.inviter.id) {
           state.writes.referralTransactions += 1;
+          createdId = `tx-ref-${state.writes.referralTransactions}`;
+          state.referralRows.push({
+            id: createdId,
+            amount: data.amount,
+            referredUserId: data.meta?.referredUserId,
+            createdAt: new Date(),
+          });
         }
         if (data.type === "BOX_REWARD" && data.userId === state.user.id) {
           state.boxRewardTransactions.push({
-            idempotencyKey: data.meta?.idempotencyKey ?? null,
+            idempotencyKey: typeof data.meta === "string" ? data.meta : data.meta?.idempotencyKey ?? null,
             amount: data.amount,
             createdAt: new Date(),
           });
         }
-        return { id: `tx-${state.writes.referralTransactions}` };
+        return {
+          id: createdId,
+          amount: data.amount,
+          meta: data.meta ?? null,
+          createdAt: new Date(),
+        };
       }),
       findFirst: jest.fn(async ({ where }: any) => {
         const idempotencyKey = where?.meta?.equals;
@@ -383,6 +474,20 @@ function createTx() {
           }
 
           return {
+            amount: matched.amount,
+            createdAt: matched.createdAt,
+          };
+        }
+
+        if (where?.type === "REFERRAL" && where?.meta?.path?.[0] === "referredUserId") {
+          const referredUserId = where?.meta?.equals;
+          const matched = [...state.referralRows].reverse().find((row) => row.referredUserId === referredUserId);
+          if (!matched) {
+            return null;
+          }
+
+          return {
+            id: matched.id,
             amount: matched.amount,
             createdAt: matched.createdAt,
           };

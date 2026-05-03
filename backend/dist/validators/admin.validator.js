@@ -44,12 +44,36 @@ const adminRewardConfigFields = {
     minBoxReward: zod_1.z.union([zod_1.z.string(), zod_1.z.number()]).optional(),
     maxBoxReward: zod_1.z.union([zod_1.z.string(), zod_1.z.number()]).optional(),
     waitlistBonus: zod_1.z.union([zod_1.z.string(), zod_1.z.number()]).optional(),
+    maxPayoutMultiplier: zod_1.z.union([zod_1.z.string(), zod_1.z.number()]).optional(),
+    minRtpModifier: zod_1.z.union([zod_1.z.string(), zod_1.z.number()]).optional(),
+    maxRtpModifier: zod_1.z.union([zod_1.z.string(), zod_1.z.number()]).optional(),
+    maxPlaysPerDay: zod_1.z.union([zod_1.z.string(), zod_1.z.number()]).optional(),
+    withdrawMinPlays: zod_1.z.union([zod_1.z.string(), zod_1.z.number()]).optional(),
+    withdrawCooldownMs: zod_1.z.union([zod_1.z.string(), zod_1.z.number()]).optional(),
+    withdrawRiskThreshold: zod_1.z.union([zod_1.z.string(), zod_1.z.number()]).optional(),
+    maxReferralsPerIpPerDay: zod_1.z.union([zod_1.z.string(), zod_1.z.number()]).optional(),
+    waitlistRiskThreshold: zod_1.z.union([zod_1.z.string(), zod_1.z.number()]).optional(),
+    rapidOnboardingWindowMs: zod_1.z.union([zod_1.z.string(), zod_1.z.number()]).optional(),
+    minPlayIntervalMs: zod_1.z.union([zod_1.z.string(), zod_1.z.number()]).optional(),
+    referralWindowMs: zod_1.z.union([zod_1.z.string(), zod_1.z.number()]).optional(),
 };
 exports.adminConfigPatchSchema = zod_1.z.object(adminRewardConfigFields).strict().refine((value) => value.referralRewardAmount !== undefined ||
     value.freeBoxRewardAmount !== undefined ||
     value.minBoxReward !== undefined ||
     value.maxBoxReward !== undefined ||
-    value.waitlistBonus !== undefined, {
+    value.waitlistBonus !== undefined ||
+    value.maxPayoutMultiplier !== undefined ||
+    value.minRtpModifier !== undefined ||
+    value.maxRtpModifier !== undefined ||
+    value.maxPlaysPerDay !== undefined ||
+    value.withdrawMinPlays !== undefined ||
+    value.withdrawCooldownMs !== undefined ||
+    value.withdrawRiskThreshold !== undefined ||
+    value.maxReferralsPerIpPerDay !== undefined ||
+    value.waitlistRiskThreshold !== undefined ||
+    value.rapidOnboardingWindowMs !== undefined ||
+    value.minPlayIntervalMs !== undefined ||
+    value.referralWindowMs !== undefined, {
     message: "At least one reward amount is required",
 });
 exports.adminGameRewardsConfigSchema = exports.adminConfigPatchSchema;

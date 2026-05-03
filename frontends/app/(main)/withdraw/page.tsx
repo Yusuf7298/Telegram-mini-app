@@ -8,6 +8,8 @@ import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
 import { useToast } from '@/components/ui/ToastProvider';
 import { useWalletStore, WALLET_REFRESH_EVENT } from "@/store/walletStore";
 import NotificationCenter from '@/components/notification/NotificationCenter';
+import { useActionLock } from '@/hooks/useActionLock';
+import { OfflineBanner } from '@/components/ui/OfflineBanner';
 
 type WithdrawData = {
   cashBalance?: number | string;
@@ -53,6 +55,7 @@ export default function WithdrawPage() {
   const [lastAttempt, setLastAttempt] = useState<{ amount: string; idempotencyKey: string } | null>(null);
   const { showToast } = useToast();
   const router = useRouter();
+  const withdrawLock = useActionLock();
 
   const selectedBalance = useMemo(
     () => (balanceType === "cash" ? cash : airtime),
@@ -127,15 +130,20 @@ export default function WithdrawPage() {
     };
 
     setLastAttempt(attempt);
-    await executeWithdraw(attempt);
+    try {
+      await withdrawLock.run('withdraw', async () => await executeWithdraw(attempt), { cooldownMs: 1000 });
+    } catch (err) {
+      // blocked by lock or other error handled in executeWithdraw
+    }
   };
 
   const handleRetryLastAttempt = async () => {
-    if (!lastAttempt || loading) {
-      return;
+    if (!lastAttempt) return;
+    try {
+      await withdrawLock.run('withdraw:retry', async () => await executeWithdraw(lastAttempt, true), { cooldownMs: 1000 });
+    } catch (err) {
+      // ignore
     }
-
-    await executeWithdraw(lastAttempt, true);
   };
 
   function handleClick() {
@@ -151,6 +159,7 @@ export default function WithdrawPage() {
 
   return (
     <div className="min-h-telegram-screen safe-screen-padding overflow-x-hidden bg-gradient-to-bl from-[#2C5364] via-[#000000] to-[#020617] pb-28">
+      <OfflineBanner />
       <div className="mx-auto flex min-h-screen w-full max-w-md flex-col bg-[radial-gradient(circle_at_top,_rgba(11,38,63,0.9),_rgba(0,6,18,1)_72%)]">
         <div className="flex items-center justify-between px-4 pt-6 pb-4 border-b border-gray-800">
         <button onClick={handleClick} aria-label="Go back" className="flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-transparent text-white shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/50">

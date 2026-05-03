@@ -11,6 +11,7 @@ const client_1 = require("@prisma/client");
 const responder_1 = require("../../utils/responder");
 const idempotencyKey_1 = require("../../utils/idempotencyKey");
 const logger_1 = require("../../services/logger");
+const dbHealthGuard_middleware_1 = require("../../middleware/dbHealthGuard.middleware");
 function getRequestUserId(req) {
     return req.userId;
 }
@@ -112,6 +113,9 @@ async function withdrawFromWallet(req, res) {
         }
         if (typeof idempotencyKey !== "string" || !idempotencyKey.trim()) {
             return (0, responder_1.failure)(res, "INVALID_INPUT", "idempotencyKey is required");
+        }
+        if (await (0, dbHealthGuard_middleware_1.rejectIfDbUnhealthy)(res)) {
+            return;
         }
         const replaySafeResponse = await (0, wallet_service_1.withdrawWallet)(userId, amount, idempotencyKey);
         const responseDataWithWalletSnapshot = await ensureWalletSnapshotInResponseData(replaySafeResponse.data, userId);

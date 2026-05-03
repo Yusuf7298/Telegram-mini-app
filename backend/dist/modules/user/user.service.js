@@ -1,9 +1,14 @@
 "use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.generateReferralCode = generateReferralCode;
+exports.generateUniqueReferralCode = generateUniqueReferralCode;
 exports.createUser = createUser;
 const db_1 = require("../../config/db");
 const client_1 = require("@prisma/client");
+const crypto_1 = __importDefault(require("crypto"));
 const gameConfig_service_1 = require("../../services/gameConfig.service");
 const REFERRAL_CODE_MIN_LENGTH = 6;
 const REFERRAL_CODE_MAX_LENGTH = 8;
@@ -16,10 +21,23 @@ function generateReferralCode(length = DEFAULT_REFERRAL_CODE_LENGTH) {
     }
     let code = "";
     for (let i = 0; i < length; i += 1) {
-        const index = Math.floor(Math.random() * REFERRAL_CODE_CHARSET.length);
+        const index = crypto_1.default.randomInt(0, REFERRAL_CODE_CHARSET.length);
         code += REFERRAL_CODE_CHARSET[index];
     }
     return code;
+}
+async function generateUniqueReferralCode(length = DEFAULT_REFERRAL_CODE_LENGTH, maxAttempts = MAX_REFERRAL_CODE_ATTEMPTS) {
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        const referralCode = generateReferralCode(length);
+        const referralCodeInUse = await db_1.prisma.user.findUnique({
+            where: { referralCode },
+            select: { id: true },
+        });
+        if (!referralCodeInUse) {
+            return referralCode;
+        }
+    }
+    throw new Error("Failed to generate a unique referral code after multiple attempts");
 }
 function isReferralCodeUniqueConstraintError(error) {
     if (!(error instanceof client_1.Prisma.PrismaClientKnownRequestError)) {
@@ -40,18 +58,10 @@ async function createUser(telegramId, username, options) {
     });
     if (existing)
         return existing;
-    const config = await (0, gameConfig_service_1.getValidatedGameConfig)();
+    const config = await (0, gameConfig_service_1.getValidatedGameConfig)({ bypassCache: true });
     for (let attempt = 1; attempt <= MAX_REFERRAL_CODE_ATTEMPTS; attempt += 1) {
-        const referralCode = generateReferralCode();
-        const referralCodeInUse = await db_1.prisma.user.findUnique({
-            where: { referralCode },
-            select: { id: true },
-        });
-        if (referralCodeInUse) {
-            continue;
-        }
+        const referralCode = await generateUniqueReferralCode();
         try {
-            // Welcome bonus: set bonusBalance and lock it for progression rules.
             return await db_1.prisma.user.create({
                 data: {
                     telegramId,

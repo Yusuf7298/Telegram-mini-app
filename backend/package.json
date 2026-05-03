@@ -11,6 +11,9 @@
     "migrate:deploy": "prisma migrate deploy",
     "seed": "prisma db seed",
     "deploy:prepare": "npx prisma migrate deploy && npx prisma db seed",
+    "stress:test": "ts-node scripts/stress_referral_box_flow.ts",
+    "smoke:e2e": "ts-node scripts/e2e_smoke_referral_wallet_flow.ts",
+    "production:check": "ts-node scripts/production_check.ts",
     "lint": "eslint src --ext .ts,.js",
     "lint:fix": "eslint src --fix",
     "prepare": "echo 'skip husky in production'"

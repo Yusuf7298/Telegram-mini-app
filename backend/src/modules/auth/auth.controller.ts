@@ -3,6 +3,7 @@ import { authWithTelegram, generateToken } from "./auth.service";
 import { verifyTelegramData } from "./telegramAuth";
 import { AlertService } from "../../services/alert.service";
 import { applyReferralCode, ReferralServiceError } from "../../services/referral.service";
+import { extractIdempotencyKey } from "../../utils/idempotencyKey";
 import { prisma } from "../../config/db";
 import { failure, success } from "../../utils/responder";
 
@@ -58,11 +59,14 @@ export async function telegramLogin(req: Request, res: Response) {
     if (normalizedReferralCode) {
       referralStatus.attempted = true;
       try {
+        const idempotencyKey = extractIdempotencyKey(req) || `auto:${user.id}:${Date.now()}`;
+
         const referralResult = await applyReferralCode({
           referredUserId: user.id,
           referralCode: normalizedReferralCode,
           ip,
           deviceId: (req.headers["x-device-id"] as string | undefined) || undefined,
+          idempotencyKey,
         });
         referralStatus.applied = true;
         referralStatus.status = "applied";

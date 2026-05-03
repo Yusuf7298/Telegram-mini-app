@@ -19,6 +19,19 @@ jest.mock("../../services/alert.service", () => ({
   },
 }));
 
+jest.mock("../../config/db", () => ({
+  prisma: {
+    user: {
+      findUnique: jest.fn(async ({ where }: any) => ({
+        id: where.id,
+        platformId: "12345",
+        username: "john",
+        role: "USER",
+      })),
+    },
+  },
+}));
+
 import { telegramLogin } from "./auth.controller";
 
 function createResponseMock() {
@@ -48,6 +61,7 @@ describe("telegramLogin", () => {
       id: "user-1",
       platformId: "12345",
       username: "john",
+      role: "USER",
     };
 
     mockVerifyTelegramData.mockReturnValue(true);
@@ -62,12 +76,17 @@ describe("telegramLogin", () => {
       deviceId: "device-123",
       userAgent: "jest-agent",
     });
-    expect(mockGenerateToken).toHaveBeenCalledWith("user-1");
+    expect(mockGenerateToken).toHaveBeenCalledWith("user-1", "USER");
     expect(res.json).toHaveBeenCalledWith({
       success: true,
       data: {
         token: "jwt-token",
         user,
+        referral: {
+          attempted: false,
+          applied: false,
+          status: "not_provided",
+        },
       },
       error: null,
     });

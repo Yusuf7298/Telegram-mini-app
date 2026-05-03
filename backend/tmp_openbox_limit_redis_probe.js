@@ -1,13 +1,11 @@
 require("dotenv").config();
-const { PrismaClient, Prisma } = require("@prisma/client");
-const { PrismaPg } = require("@prisma/adapter-pg");
+const { Prisma } = require("@prisma/client");
+const { prisma } = require("./dist/config/db");
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 const Redis = require("ioredis");
 
 async function main() {
-  const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
-  const prisma = new PrismaClient({ adapter });
   const redis = new Redis(process.env.REDIS_URL);
 
   try {

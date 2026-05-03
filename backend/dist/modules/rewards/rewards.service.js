@@ -10,7 +10,7 @@ const withTransactionRetry_1 = require("../../services/withTransactionRetry");
 const auditLog_service_1 = require("../../services/auditLog.service");
 const gameConfig_service_1 = require("../../services/gameConfig.service");
 async function getRewardConfig() {
-    const config = await (0, gameConfig_service_1.getValidatedGameConfig)();
+    const config = await (0, gameConfig_service_1.getValidatedGameConfig)({ bypassCache: true });
     return {
         dailyRewardTable: config.dailyRewardTable,
         dailyRewardBigWinThreshold: config.dailyRewardBigWinThreshold,

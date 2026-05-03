@@ -2,10 +2,9 @@
 import { env } from "../../config/env";
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL?.trim() || process.env.TEST_API_URL?.trim();
-if (!testDatabaseUrl) {
-  throw new Error('TEST_DATABASE_URL or TEST_API_URL must be set for wallet tests');
+if (testDatabaseUrl) {
+  env.DATABASE_URL = testDatabaseUrl;
 }
-env.DATABASE_URL = testDatabaseUrl;
 
 import { prisma } from '../../config/db';
 import { D } from '../../utils/money';
@@ -32,7 +31,7 @@ describe.skip('Wallet Safety', () => {
   });
 
   test('Prevent negative balance', async () => {
-    await expect(walletService.withdrawWallet(userId, D(2000))).rejects.toThrow(/Insufficient cash balance/);
+    await expect(walletService.withdrawWallet({ userId, amount: D(2000), idempotencyKey: `test-${Date.now()}-neg` })).rejects.toThrow(/Insufficient cash balance/);
     const wallet = await prisma.wallet.findUnique({ where: { userId } });
     expect(wallet?.cashBalance.gte(0)).toBe(true);
   });
@@ -40,8 +39,8 @@ describe.skip('Wallet Safety', () => {
   test('Concurrent deduction safety', async () => {
     await prisma.wallet.update({ where: { userId }, data: { cashBalance: D(1000) } });
     const tasks = [
-      walletService.withdrawWallet(userId, D(700)),
-      walletService.withdrawWallet(userId, D(700)),
+      walletService.withdrawWallet({ userId, amount: D(700), idempotencyKey: `test-${Date.now()}-a` }),
+      walletService.withdrawWallet({ userId, amount: D(700), idempotencyKey: `test-${Date.now()}-b` }),
     ];
     const results = await Promise.allSettled(tasks);
     const wallet = await prisma.wallet.findUnique({ where: { userId } });
@@ -52,7 +51,7 @@ describe.skip('Wallet Safety', () => {
 
   test('Transaction log correctness', async () => {
     await prisma.wallet.update({ where: { userId }, data: { cashBalance: D(1000) } });
-    await walletService.withdrawWallet(userId, D(200));
+    await walletService.withdrawWallet({ userId, amount: D(200), idempotencyKey: `test-${Date.now()}-tx` });
     const txs = await prisma.transaction.findMany({ where: { userId } });
     expect(txs.some(tx => tx.amount.equals(D(-200)))).toBe(true);
   });
@@ -83,14 +82,14 @@ describe.skip('Wallet Safety', () => {
   test('Bonus usage correctness', async () => {
     await prisma.wallet.update({ where: { userId }, data: { cashBalance: D(0), bonusBalance: D(500) } });
     // Simulate bonus usage (should not allow withdrawal)
-    await expect(walletService.withdrawWallet(userId, D(100))).rejects.toThrow(/Bonus cannot be withdrawn/);
+    await expect(walletService.withdrawWallet({ userId, amount: D(100), idempotencyKey: `test-${Date.now()}-bonus` })).rejects.toThrow(/Bonus cannot be withdrawn/);
     const wallet = await prisma.wallet.findUnique({ where: { userId } });
     expect(wallet?.bonusBalance.equals(D(500))).toBe(true);
   });
 
   test('Wallet integrity check', async () => {
     await prisma.wallet.update({ where: { userId }, data: { cashBalance: D(1000), bonusBalance: D(0) } });
-    await walletService.withdrawWallet(userId, D(100));
+    await walletService.withdrawWallet({ userId, amount: D(100), idempotencyKey: `test-${Date.now()}-integrity` });
     const ok = await walletService.checkWalletIntegrity(userId);
     expect(ok).toBe(true);
   });

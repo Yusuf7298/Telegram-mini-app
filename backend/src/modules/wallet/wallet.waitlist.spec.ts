@@ -1,6 +1,28 @@
 import { Prisma } from "@prisma/client";
 import { withdrawWallet } from "./wallet.service";
 
+jest.mock("../../services/logger", () => ({
+  logStructuredEvent: jest.fn().mockResolvedValue(undefined),
+  logError: jest.fn().mockResolvedValue(undefined),
+  logJackpotSkip: jest.fn().mockResolvedValue(undefined),
+}));
+
+jest.mock("../../services/rules.service", () => ({
+  canUserWithdraw: jest.fn(async () => ({ allowed: true })),
+}));
+
+jest.mock("../../services/fraudDetection.service", () => ({
+  recordWithdrawAttempt: jest.fn(async () => ({ isSuspicious: false })),
+}));
+
+jest.mock("../../services/suspiciousActionLog.service", () => ({
+  logSuspiciousAction: jest.fn().mockResolvedValue(undefined),
+}));
+
+jest.mock("../../services/auditLog.service", () => ({
+  logAudit: jest.fn().mockResolvedValue(undefined),
+}));
+
 jest.mock("../../utils/lock", () => ({
   withUserLock: async (_userId: string, fn: () => Promise<unknown>) => fn(),
 }));
@@ -21,7 +43,7 @@ jest.mock("../../services/idempotency.service", () => ({
 
 jest.mock("../../config/db", () => ({
   prisma: {
-    $transaction: jest.fn(),
+    $transaction: jest.fn(async (fn: (tx: any) => Promise<unknown>) => fn((global as any).__WALLET_TX__)),
   },
 }));
 
@@ -34,6 +56,7 @@ function d(v: number | string) {
 describe("wallet withdraw waitlist unlock", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    delete (global as any).__WALLET_TX__;
     createIdempotencyKey.mockResolvedValue({});
     checkIdempotencyKey.mockResolvedValue(null);
     completeIdempotencyKey.mockResolvedValue({});
@@ -50,8 +73,22 @@ describe("wallet withdraw waitlist unlock", () => {
     };
 
     const tx = {
+      $executeRaw: jest.fn().mockResolvedValue(1),
+      user: {
+        findUnique: jest.fn().mockResolvedValue({
+          isFrozen: false,
+          accountStatus: "ACTIVE",
+          riskScore: 0,
+          totalPlaysCount: 10,
+        }),
+      },
       wallet: {
         findUnique: jest.fn().mockResolvedValue(state.wallet),
+        update: jest.fn().mockImplementation(async ({ data }: any) => {
+          state.wallet.cashBalance = data.cashBalance;
+          state.wallet.bonusBalance = data.bonusBalance;
+          return state.wallet;
+        }),
         updateMany: jest.fn().mockImplementation(async ({ data }: any) => {
           state.wallet.cashBalance = data.cashBalance;
           state.wallet.bonusBalance = data.bonusBalance;
@@ -59,13 +96,14 @@ describe("wallet withdraw waitlist unlock", () => {
         }),
       },
       transaction: {
+        findFirst: jest.fn().mockResolvedValue({ createdAt: new Date(Date.now() - 10 * 60 * 1000) }),
         create: jest.fn().mockResolvedValue({}),
       },
     };
 
     (global as any).__WALLET_TX__ = tx;
 
-    await withdrawWallet("u1", d(300), "wallet-idem-1");
+    await withdrawWallet({ userId: "u1", amount: d(300), idempotencyKey: "wallet-idem-1" });
 
     expect(state.wallet.cashBalance.toNumber()).toBe(0);
     expect(state.wallet.bonusBalance.toNumber()).toBe(700);

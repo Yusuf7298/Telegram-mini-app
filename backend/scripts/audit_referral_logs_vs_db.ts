@@ -17,33 +17,27 @@ type LogRow = {
 
 function decodeLogFile(filePath: string): string {
   const buf = fs.readFileSync(filePath);
-
-  // PowerShell redirection often writes UTF-16LE on Windows.
   const looksUtf16Le = buf.length > 2 && buf[0] === 0xff && buf[1] === 0xfe;
   if (looksUtf16Le) {
     return buf.toString("utf16le");
   }
-
   return buf.toString("utf8");
 }
 
 function parseStructuredLogs(filePath: string): LogRow[] {
   const raw = decodeLogFile(filePath);
   const rows: LogRow[] = [];
-
   for (const line of raw.split(/\r?\n/)) {
     const trimmed = line.trim();
     if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
       continue;
     }
-
     try {
       const parsed = JSON.parse(trimmed) as LogRow;
       if (parsed && parsed.event) {
         rows.push(parsed);
       }
     } catch {
-      // Ignore non-JSON/non-structured lines.
     }
   }
 
@@ -132,7 +126,7 @@ async function main() {
         : undefined;
 
     const grantMatches =
-      grant.referrerId === row.inviterId &&
+      grant.inviterId === row.inviterId &&
       grant.referredUserId === row.referredUserId &&
       grant.amount.toString() === row.rewardAmount;
 
@@ -151,7 +145,7 @@ async function main() {
         details: {
           grant: {
             id: grant.id,
-            referrerId: grant.referrerId,
+            inviterId: grant.inviterId,
             referredUserId: grant.referredUserId,
             amount: grant.amount.toString(),
           },

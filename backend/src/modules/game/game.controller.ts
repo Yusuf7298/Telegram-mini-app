@@ -3,6 +3,7 @@ import { getBoxes, openBox, openFreeBox } from "./game.service";
 import { prisma } from "../../config/db";
 import { failure, success } from "../../utils/responder";
 import { extractIdempotencyKey } from "../../utils/idempotencyKey";
+import { rejectIfDbUnhealthy } from "../../middleware/dbHealthGuard.middleware";
 
 function getRequestUserId(req: Request): string | undefined {
   return (req as Request & { userId?: string }).userId;
@@ -60,6 +61,10 @@ export async function openBoxController(req: Request, res: Response) {
 
     if (!idempotencyKey) {
       return failure(res, "INVALID_INPUT", "idempotencyKey is required");
+    }
+
+    if (await rejectIfDbUnhealthy(res)) {
+      return;
     }
 
     const replaySafeResponse = await openBox(

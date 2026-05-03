@@ -1,6 +1,58 @@
 import { Prisma } from "@prisma/client";
 import { openFreeBox } from "./game.service";
 
+jest.mock("../../services/logger", () => ({
+  logStructuredEvent: jest.fn().mockResolvedValue(undefined),
+  logError: jest.fn().mockResolvedValue(undefined),
+  logJackpotSkip: jest.fn().mockResolvedValue(undefined),
+}));
+
+jest.mock("../../services/fraudDetection.service", () => ({
+  recordBoxOpenAttempt: jest.fn(async () => ({ isSuspicious: false })),
+  recordRewardEvent: jest.fn(async () => ({ isSuspicious: false })),
+  recordReferralActivationForInviter: jest.fn(async () => ({ isAnomalous: false, count: 1, timeframeMs: 300000 })),
+  recordReferralRewardForInviter: jest.fn(async () => ({ isAnomalous: false, count: 1, timeframeMs: 300000 })),
+}));
+
+jest.mock("../../services/reward.service", () => ({
+  generateReward: jest.fn(() => new Prisma.Decimal(200)),
+}));
+
+jest.mock("../../services/gameConfig.service", () => ({
+  getValidatedGameConfig: jest.fn(async () => ({
+    id: "global",
+    rtpModifier: 1,
+    maxPayoutMultiplier: new Prisma.Decimal(1.2),
+    minRtpModifier: new Prisma.Decimal(1),
+    maxRtpModifier: new Prisma.Decimal(1.2),
+    referralRewardAmount: new Prisma.Decimal(200),
+    freeBoxRewardAmount: new Prisma.Decimal(200),
+    minBoxReward: 150,
+    maxBoxReward: 251,
+    waitlistBonus: 1000,
+    maxPlaysPerDay: 5,
+    withdrawMinPlays: 5,
+    withdrawCooldownMs: 60000,
+    withdrawRiskThreshold: 70,
+    maxReferralsPerIpPerDay: 5,
+    waitlistRiskThreshold: 50,
+    rapidOnboardingWindowMs: 10000,
+    minPlayIntervalMs: 0,
+    referralWindowMs: 86400000,
+  })),
+}));
+
+jest.mock("../../services/rules.service", () => ({
+  canUserPlay: jest.fn(async () => true),
+  isCooldownActive: jest.fn(async () => ({ active: false, elapsedMs: 0, cooldownMs: 0 })),
+  canUnlockWaitlistBonus: jest.fn(async ({ user }: any) =>
+    user.totalPlaysCount >= 5 && !user.waitlistBonusUnlocked && user.waitlistBonusEligible
+  ),
+  isRapidOnboardingCompletion: jest.fn(async () => false),
+  shouldEvaluateReferralOnPlay: jest.fn(() => false),
+  canActivateReferral: jest.fn((referral: { status: string }) => referral.status === "JOINED"),
+}));
+
 jest.mock("../../config/db", () => ({
   prisma: {},
 }));
@@ -22,6 +74,7 @@ jest.mock("../../services/idempotency.service", () => ({
 jest.mock("../../services/referral.service", () => ({
   logReferral: jest.fn(),
   checkReferralLimits: jest.fn(),
+  activateReferralFromJoinedToActive: jest.fn(async () => null),
 }));
 
 jest.mock("../../services/suspiciousActionLog.service", () => ({
@@ -49,9 +102,12 @@ function buildTx(initial: { totalPlaysCount: number; freeBoxUsed: boolean; waitl
     user: {
       id: "u1",
       isFrozen: false,
+      accountStatus: "ACTIVE",
+      riskScore: 0,
       freeBoxUsed: initial.freeBoxUsed,
       totalPlaysCount: initial.totalPlaysCount,
       waitlistBonusUnlocked: initial.waitlistBonusUnlocked,
+      waitlistBonusEligible: true,
     },
     wallet: {
       userId: "u1",
@@ -64,19 +120,16 @@ function buildTx(initial: { totalPlaysCount: number; freeBoxUsed: boolean; waitl
   const tx = {
     user: {
       findUnique: jest.fn().mockImplementation(async ({ select }: any) => {
-        if (select?.freeBoxUsed !== undefined) {
-          return {
-            id: state.user.id,
-            isFrozen: state.user.isFrozen,
-            freeBoxUsed: state.user.freeBoxUsed,
-            totalPlaysCount: state.user.totalPlaysCount,
-            waitlistBonusUnlocked: state.user.waitlistBonusUnlocked,
-          };
+        if (select && typeof select === "object") {
+          const selected: Record<string, unknown> = {};
+          for (const key of Object.keys(select)) {
+            selected[key] = (state.user as Record<string, unknown>)[key];
+          }
+          return selected;
         }
 
         return {
-          totalPlaysCount: state.user.totalPlaysCount,
-          waitlistBonusUnlocked: state.user.waitlistBonusUnlocked,
+          ...state.user,
         };
       }),
       updateMany: jest.fn().mockImplementation(async () => {
@@ -130,8 +183,14 @@ function buildTx(initial: { totalPlaysCount: number; freeBoxUsed: boolean; waitl
 describe("waitlist free-box flow", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    delete (global as any).__TX__;
     createIdempotencyKey.mockResolvedValue({});
-    completeIdempotencyKey.mockResolvedValue({});
+    completeIdempotencyKey.mockImplementation(async ({ response }: any) => {
+      if (response && response.success === true && Object.prototype.hasOwnProperty.call(response, "data")) {
+        return response;
+      }
+      return { success: true, data: response, error: null };
+    });
     checkIdempotencyKey.mockResolvedValue(null);
   });
 
@@ -140,10 +199,9 @@ describe("waitlist free-box flow", () => {
     (global as any).__TX__ = tx;
 
     const result: any = await openFreeBox("u1", "idem-1", "1.1.1.1", "dev-1");
-    const reward = Number(result.reward);
+    const reward = Number(result?.data?.reward);
 
-    expect(reward).toBeGreaterThanOrEqual(150);
-    expect(reward).toBeLessThanOrEqual(250);
+    expect(reward).toBe(200);
   });
 
   it("free box increments total play count", async () => {
@@ -152,7 +210,7 @@ describe("waitlist free-box flow", () => {
 
     const result: any = await openFreeBox("u1", "idem-2");
 
-    expect(result.totalPlaysCount).toBe(3);
+    expect(result?.data?.totalPlaysCount).toBe(3);
   });
 
   it("unlocks waitlist bonus when total plays reach 5", async () => {
@@ -161,7 +219,7 @@ describe("waitlist free-box flow", () => {
 
     const result: any = await openFreeBox("u1", "idem-3");
 
-    expect(result.totalPlaysCount).toBe(5);
+    expect(result?.data?.totalPlaysCount).toBe(5);
     expect(state.user.waitlistBonusUnlocked).toBe(true);
     expect(state.wallet.bonusLocked).toBe(false);
   });

@@ -104,7 +104,7 @@ async function detectRepeatedWins(userId, tx) {
 async function detectReferralFarming(userId, tx) {
     const client = tx || db_1.prisma;
     const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-    const count = await client.referralLog.count({ where: { referrerId: userId, createdAt: { gte: since } } });
+    const count = await client.referralLog.count({ where: { inviterId: userId, createdAt: { gte: since } } });
     if (count > 10) {
         await alert_service_1.AlertService.referralFarming(userId, count);
         await logSuspiciousAction({ userId, type: "referral_fraud", metadata: { count }, tx });

@@ -16,8 +16,11 @@ const referral_routes_1 = __importDefault(require("./modules/referral/referral.r
 const stats_routes_1 = __importDefault(require("./modules/stats/stats.routes"));
 const rewards_routes_1 = __importDefault(require("./modules/rewards/rewards.routes"));
 const config_routes_1 = __importDefault(require("./modules/config/config.routes"));
+const db_1 = require("./config/db");
 const auth_middleware_1 = require("./middleware/auth.middleware");
 const gameConfig_service_1 = require("./services/gameConfig.service");
+const correlationId_middleware_1 = require("./middleware/correlationId.middleware");
+const errorHandler_middleware_1 = require("./middleware/errorHandler.middleware");
 const app = (0, express_1.default)();
 const isProduction = env_1.env.NODE_ENV === "production";
 if (isProduction) {
@@ -46,10 +49,11 @@ const corsOptions = {
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Device-Id", "Idempotency-Key"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Device-Id", "Idempotency-Key", "X-Correlation-Id"],
 };
 app.use((0, cors_1.default)(corsOptions));
 app.options(/.*/, (0, cors_1.default)(corsOptions));
+app.use(correlationId_middleware_1.correlationIdMiddleware);
 app.disable("x-powered-by");
 app.use((_req, res, next) => {
     res.setHeader("X-Content-Type-Options", "nosniff");
@@ -71,6 +75,53 @@ app.get("/favicon.ico", (_req, res) => {
 app.get("/", (req, res) => {
     res.send("API Running 🚀");
 });
+const DB_HEALTH_TIMEOUT_MS = 3000;
+const DB_HEALTH_RETRIES = 2;
+const DB_HEALTH_RETRY_DELAY_MS = 250;
+function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+async function queryDbHealthWithTimeout() {
+    return Promise.race([
+        db_1.prisma.$queryRaw `SELECT 1`,
+        new Promise((_resolve, reject) => {
+            setTimeout(() => reject(new Error("DB health check timed out")), DB_HEALTH_TIMEOUT_MS);
+        }),
+    ]);
+}
+async function checkDbHealthWithRetry() {
+    let lastError = null;
+    const totalAttempts = DB_HEALTH_RETRIES + 1;
+    for (let attempt = 1; attempt <= totalAttempts; attempt += 1) {
+        try {
+            await queryDbHealthWithTimeout();
+            return { ok: true };
+        }
+        catch (error) {
+            lastError = error instanceof Error ? error.message : String(error);
+            if (attempt < totalAttempts) {
+                await sleep(DB_HEALTH_RETRY_DELAY_MS);
+            }
+        }
+    }
+    return {
+        ok: false,
+        error: lastError ?? "DB health check failed",
+    };
+}
+app.get("/health/db", async (_req, res) => {
+    try {
+        const result = await checkDbHealthWithRetry();
+        if (result.ok) {
+            return res.json({ status: "ok" });
+        }
+        return res.status(500).json({ status: "fail", error: result.error });
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return res.status(500).json({ status: "fail", error: message });
+    }
+});
 app.use("/api/auth", auth_routes_1.default);
 app.use("/api", admin_routes_1.default);
 app.use("/api/user", auth_middleware_1.authMiddleware, user_routes_1.default);
@@ -84,20 +135,7 @@ app.use("/api/rewards", auth_middleware_1.authMiddleware, rewards_routes_1.defau
 app.get("/test", async (req, res) => {
     res.send("Working ✅");
 });
-app.use((err, _req, res, _next) => {
-    console.error(err);
-    const error = err;
-    const status = typeof error.status === "number" && error.status >= 400
-        ? error.status
-        : 500;
-    const message = typeof error.message === "string" && error.message.trim().length > 0
-        ? error.message
-        : "Internal Server Error";
-    return res.status(status).json({
-        success: false,
-        error: message,
-    });
-});
+app.use(errorHandler_middleware_1.globalErrorHandler);
 const port = Number(env_1.env.PORT) || 5000;
 async function startServer() {
     await (0, gameConfig_service_1.assertGameConfigOnStartup)();

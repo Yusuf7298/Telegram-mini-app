@@ -1,9 +1,7 @@
 // @ts-nocheck
 import request from 'supertest';
-import { PrismaClient } from '@prisma/client';
 import app from '../../src/server';
-
-const prisma = new PrismaClient();
+import { prisma } from '../../src/config/db';
 
 // Utility to reset DB between tests
 async function resetDb() {

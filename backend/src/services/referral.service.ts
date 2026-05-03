@@ -1,13 +1,16 @@
 // NEW: Referral protection service
 import { prisma } from "../config/db";
+import { isFeatureEnabled } from "../config/featureFlags";
 import { Prisma } from "@prisma/client";
 import { ApiErrorCode } from "../utils/apiResponse";
 import { logStructuredEvent } from "./logger";
+import { logAudit } from "./auditLog.service";
 import { canUseReferral } from "./rules.service";
 import { ONE, ZERO, ZERO_STRING } from "../constants/numbers";
 import { getCorrelationId } from "./requestContext.service";
-import { enforceReferralAbuseGuards } from "./referralAbuse.service";
 import { getValidatedGameConfig } from "./gameConfig.service";
+import { createReferralStructuredLogPayload } from "./referralLogPayload.service";
+import { withTransactionRetry } from "./withTransactionRetry";
 
 export class ReferralServiceError extends Error {
   code: ApiErrorCode;
@@ -18,11 +21,13 @@ export class ReferralServiceError extends Error {
   }
 }
 
+
 type ApplyReferralParams = {
   referredUserId: string;
   referralCode: string;
   ip: string;
   deviceId?: string;
+  idempotencyKey: string;
 };
 
 export type ApplyReferralResult = {
@@ -49,6 +54,71 @@ export type ApplyReferralResult = {
     suspicious: boolean;
   };
 };
+
+export type ReferralActivationResult = {
+  referredUserId: string;
+  referrerId: string;
+  rewardAmount: string;
+  referralId: string;
+  transactionId: string;
+};
+
+class DuplicateReferralRewardError extends Error {
+  existingReferralId: string | null;
+  existingTransactionId: string | null;
+
+  constructor(existingReferralId: string | null, existingTransactionId: string | null) {
+    super("Duplicate referral reward detected");
+    this.name = "DuplicateReferralRewardError";
+    this.existingReferralId = existingReferralId;
+    this.existingTransactionId = existingTransactionId;
+  }
+}
+
+type ActivateReferralParams = {
+  referredUserId: string;
+  sourceAction?: string;
+  endpoint?: string;
+  tx?: Prisma.TransactionClient;
+  rewardAmount?: Prisma.Decimal;
+};
+
+async function emitReferralEvent(params: {
+  event: "referral_joined" | "referral_activation_attempt" | "referral_reward_granted" | "referral_duplicate_blocked";
+  endpoint: string;
+  inviterId: string;
+  referredUserId: string;
+  rewardAmount: string;
+  status: string;
+  correlationId?: string | null;
+  referralId?: string | null;
+  transactionId?: string | null;
+  reason?: string | null;
+  detectionSource?: string | null;
+  referralCode?: string | null;
+  ip?: string | null;
+  deviceId?: string | null;
+}) {
+  await logStructuredEvent(
+    params.event,
+    createReferralStructuredLogPayload({
+      event: params.event,
+      endpoint: params.endpoint,
+      inviterId: params.inviterId,
+      referredUserId: params.referredUserId,
+      rewardAmount: params.rewardAmount,
+      status: params.status,
+      correlationId: params.correlationId?.trim() || getCorrelationId() || "unknown",
+      referralId: params.referralId ?? null,
+      transactionId: params.transactionId ?? null,
+      reason: params.reason ?? null,
+      detectionSource: params.detectionSource ?? null,
+      referralCode: params.referralCode ?? null,
+      ip: params.ip ?? null,
+      deviceId: params.deviceId ?? null,
+    })
+  );
+}
 
 export async function logReferral({
   referrerId,
@@ -95,21 +165,59 @@ export async function checkReferralLimits({
   });
 }
 
-export async function applyReferralCode({
-  referredUserId,
-  referralCode,
-  ip,
-  deviceId,
-}: ApplyReferralParams): Promise<ApplyReferralResult> {
+export async function applyReferralCode(params: ApplyReferralParams): Promise<ApplyReferralResult> {
+  const { referredUserId, referralCode, ip, deviceId, idempotencyKey } = params;
   const normalizedCode = referralCode.trim().toUpperCase();
+
+  // Feature flag: disable referral system entirely if flag is off
+  if (!(await isFeatureEnabled('referral.enabled'))) {
+    throw new ReferralServiceError('FORBIDDEN', 'Referrals are temporarily disabled');
+  }
 
   if (!normalizedCode) {
     throw new ReferralServiceError("INVALID_INPUT", "Referral code is required");
   }
-
-  return prisma.$transaction(async (tx) => {
+  return withTransactionRetry(prisma, async (tx) => {
+    // IDEMPOTENCY ENFORCEMENT
+    const existing = await (await import("./idempotency.service")).checkIdempotencyKey({
+      id: idempotencyKey,
+      userId: referredUserId,
+      tx,
+    });
+    if (existing?.status === "COMPLETED") {
+      if (existing.response && typeof existing.response === 'object' && 'data' in existing.response) {
+        return (existing.response as any).data as ApplyReferralResult;
+      }
+      throw new ReferralServiceError('REPLAY_ATTACK', 'Duplicate idempotency key, but no valid response cached');
+    }
+    if (existing?.status === "PENDING") {
+      throw new ReferralServiceError("REPLAY_ATTACK", "Idempotent request is still processing");
+    }
+    try {
+      await (await import("./idempotency.service")).createIdempotencyKey({
+        id: idempotencyKey,
+        userId: referredUserId,
+        action: "applyReferralCode",
+        tx,
+      });
+    } catch (err) {
+      const duplicate = await (await import("./idempotency.service")).checkIdempotencyKey({
+        id: idempotencyKey,
+        userId: referredUserId,
+        tx,
+      });
+      if (duplicate?.status === "COMPLETED") {
+        if (duplicate.response && typeof duplicate.response === 'object' && 'data' in duplicate.response) {
+          return (duplicate.response as any).data as ApplyReferralResult;
+        }
+        throw new ReferralServiceError('REPLAY_ATTACK', 'Duplicate idempotency key, but no valid response cached');
+      }
+      if (duplicate?.status === "PENDING") {
+        throw new ReferralServiceError("REPLAY_ATTACK", "Idempotent request is still processing");
+      }
+      throw err;
+    }
     const correlationId = getCorrelationId() ?? "unknown";
-    const config = await getValidatedGameConfig({ bypassCache: true });
     const invitedUser = await tx.user.findUnique({
       where: { id: referredUserId },
       select: {
@@ -162,18 +270,19 @@ export async function applyReferralCode({
         throw new ReferralServiceError("NOT_FOUND", "Wallet not found");
       }
 
-      await logStructuredEvent("referral_duplicate_blocked", {
-        userId: invitedUser.id,
+      await emitReferralEvent({
+        event: "referral_duplicate_blocked",
         endpoint: "referral/use",
-        action: "referral_duplicate_blocked",
         inviterId: existingInviter.id,
         referredUserId: invitedUser.id,
-        status: invitedUser.referralStatus,
         rewardAmount: ZERO_STRING,
+        status: invitedUser.referralStatus,
         correlationId,
         referralCode: existingInviter.referralCode,
         reason: "duplicate_grant",
         detectionSource: "pre-check",
+        ip,
+        deviceId: safeDeviceId,
       });
 
       return {
@@ -222,38 +331,6 @@ export async function applyReferralCode({
 
     if (inviter.id === invitedUser.id) {
       throw new ReferralServiceError("INVALID_INPUT", "Cannot refer yourself");
-    }
-
-    const abuseGuard = await enforceReferralAbuseGuards({
-      tx,
-      referredUserId: invitedUser.id,
-      inviterId: inviter.id,
-      ip,
-      deviceId: safeDeviceId,
-      invitedTelegramId: invitedUser.telegramId,
-      inviterTelegramId: inviter.telegramId,
-      invitedSignupDeviceId: invitedUser.signupDeviceId,
-      invitedDeviceHash: invitedUser.deviceHash,
-      maxReferralsPerIpPerDay: config.maxReferralsPerIpPerDay,
-    });
-
-    if (!abuseGuard.allowed) {
-      await logStructuredEvent("referral_abuse_blocked", {
-        userId: invitedUser.id,
-        endpoint: "referral/use",
-        action: "referral_abuse_blocked",
-        inviterId: inviter.id,
-        referredUserId: invitedUser.id,
-        status: invitedUser.referralStatus,
-        referralCode: normalizedCode,
-        reason: abuseGuard.reason,
-        ip,
-        deviceId: safeDeviceId,
-        correlationId,
-        ...abuseGuard.details,
-      });
-
-      throw new ReferralServiceError("RATE_LIMIT", "Referral blocked due to abuse detection");
     }
 
     const allowed = await checkReferralLimits({
@@ -313,18 +390,19 @@ export async function applyReferralCode({
         throw new ReferralServiceError("INVALID_INPUT", "Referral already used");
       }
 
-      await logStructuredEvent("referral_duplicate_blocked", {
-        userId: alreadyLinkedUser.id,
+      await emitReferralEvent({
+        event: "referral_duplicate_blocked",
         endpoint: "referral/use",
-        action: "referral_duplicate_blocked",
         inviterId: alreadyLinkedUser.referredById,
         referredUserId: alreadyLinkedUser.id,
-        status: alreadyLinkedUser.referralStatus,
         rewardAmount: ZERO_STRING,
+        status: alreadyLinkedUser.referralStatus,
         correlationId,
         referralCode: normalizedCode,
         reason: "duplicate_grant",
         detectionSource: "post-claim",
+        ip,
+        deviceId: safeDeviceId,
       });
 
       const existingInviter = await tx.user.findUnique({
@@ -435,23 +513,20 @@ export async function applyReferralCode({
       throw new ReferralServiceError("NOT_FOUND", "Wallet not found");
     }
 
-    await logStructuredEvent("referral_joined", {
-      userId: invitedUser.id,
+    await emitReferralEvent({
+      event: "referral_joined",
       endpoint: "referral/use",
-      action: "referral_joined",
-      referrerId: inviter.id,
       inviterId: inviter.id,
       referredUserId: invitedUser.id,
-      status: "JOINED",
       rewardAmount: ZERO_STRING,
+      status: "JOINED",
       correlationId,
       referralCode: normalizedCode,
       ip,
       deviceId: safeDeviceId,
-      referralStatus: "JOINED",
     });
 
-    return {
+    const result: ApplyReferralResult = {
       referralCode: normalizedCode,
       walletSnapshot: {
         cashBalance: invitedUserWallet.cashBalance.toString(),
@@ -475,5 +550,250 @@ export async function applyReferralCode({
         suspicious: !allowed,
       },
     };
+
+    await (await import("./idempotency.service")).completeIdempotencyKey({
+      id: idempotencyKey,
+      userId: referredUserId,
+      response: result,
+      metadata: {
+        action: "applyReferralCode",
+        referralCode: normalizedCode,
+      },
+      tx,
+    });
+
+    return result;
   });
 }
+
+export async function activateReferralFromJoinedToActive({
+  referredUserId,
+  sourceAction = "open_box_success",
+  endpoint = "game/open-box",
+  tx,
+  rewardAmount,
+}: ActivateReferralParams): Promise<ReferralActivationResult | null> {
+  // Respect feature flag: if referrals disabled, skip activation
+  if (!(await isFeatureEnabled('referral.enabled'))) {
+    return null;
+  }
+  const resolvedRewardAmount =
+    rewardAmount ?? (await getValidatedGameConfig({ bypassCache: true })).referralRewardAmount;
+
+  const runActivation = async (
+    client: Prisma.TransactionClient,
+    onDuplicate: "return-null" | "throw"
+  ): Promise<ReferralActivationResult | null> => {
+    const referredUser = await client.user.findUnique({
+      where: { id: referredUserId },
+      select: {
+        referredById: true,
+        referralStatus: true,
+      },
+    });
+
+    if (!referredUser?.referredById) {
+      return null;
+    }
+
+    if (referredUser.referralStatus !== "JOINED") {
+      return null;
+    }
+
+    const referrerId = referredUser.referredById;
+    const correlationId = getCorrelationId() ?? "unknown";
+    const activationRewardAmount = resolvedRewardAmount;
+
+    let rewardGrant: { id: string; amount: Prisma.Decimal };
+    try {
+      rewardGrant = await client.referralRewardGrant.create({
+        data: {
+          inviterId: referrerId,
+          referredUserId,
+          amount: activationRewardAmount,
+          sourceAction,
+        },
+        select: { id: true, amount: true },
+      });
+
+      // Emit attempt only after the DB grant-insert attempt actually succeeded.
+      await emitReferralEvent({
+        event: "referral_activation_attempt",
+        endpoint,
+        inviterId: referrerId,
+        referredUserId,
+        rewardAmount: activationRewardAmount.toString(),
+        status: "JOINED",
+        correlationId,
+      });
+    } catch (error) {
+      if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== "P2002") {
+        throw error;
+      }
+
+      const findReferralTx =
+        typeof (client.transaction as { findFirst?: unknown }).findFirst === "function"
+          ? client.transaction.findFirst({
+              where: {
+                userId: referrerId,
+                type: "REFERRAL",
+                meta: {
+                  path: ["referredUserId"],
+                  equals: referredUserId,
+                },
+              },
+              orderBy: { createdAt: "desc" },
+              select: { id: true },
+            })
+          : Promise.resolve(null);
+
+      const [existingGrant, existingReferralTx] = await Promise.all([
+        client.referralRewardGrant.findUnique({
+          where: { referredUserId },
+          select: { id: true, amount: true },
+        }),
+        findReferralTx,
+      ]);
+
+      // Duplicate is an actual grant-insert attempt too, so emit attempt here once.
+      await emitReferralEvent({
+        event: "referral_activation_attempt",
+        endpoint,
+        inviterId: referrerId,
+        referredUserId,
+        rewardAmount: existingGrant?.amount?.toString?.() ?? activationRewardAmount.toString(),
+        status: "JOINED",
+        correlationId,
+      });
+
+      await emitReferralEvent({
+        event: "referral_duplicate_blocked",
+        endpoint,
+        inviterId: referrerId,
+        referredUserId,
+        rewardAmount: existingGrant?.amount?.toString?.() ?? activationRewardAmount.toString(),
+        status: "JOINED",
+        referralId: existingGrant?.id ?? null,
+        transactionId: existingReferralTx?.id ?? null,
+        reason: "reward_grant_unique_conflict",
+        detectionSource: "p2002",
+        correlationId,
+      });
+
+      if (onDuplicate === "throw") {
+        throw new DuplicateReferralRewardError(existingGrant?.id ?? null, existingReferralTx?.id ?? null);
+      }
+
+      // A concurrent request already granted the reward. Returning null keeps this path idempotent.
+      return null;
+    }
+
+    const activationUpdate = await client.user.updateMany({
+      where: {
+        id: referredUserId,
+        referralStatus: "JOINED",
+      },
+      data: {
+        referralStatus: "ACTIVE",
+        referralActivatedAt: new Date(),
+      },
+    });
+
+    if (activationUpdate.count !== ONE) {
+      throw new Error("Referral status transition failed: expected JOINED -> ACTIVE");
+    }
+
+    const referrerWalletBefore = await client.wallet.findUnique({
+      where: { userId: referrerId },
+      select: {
+        cashBalance: true,
+        bonusBalance: true,
+      },
+    });
+
+    if (!referrerWalletBefore) {
+      throw new Error("Referrer wallet not found");
+    }
+
+    const balanceBefore = referrerWalletBefore.cashBalance.plus(referrerWalletBefore.bonusBalance);
+    const referrerWalletAfter = await client.wallet.update({
+      where: { userId: referrerId },
+      data: {
+        cashBalance: { increment: activationRewardAmount },
+      },
+      select: {
+        cashBalance: true,
+        bonusBalance: true,
+      },
+    });
+    const balanceAfter = referrerWalletAfter.cashBalance.plus(referrerWalletAfter.bonusBalance);
+
+    if (!balanceAfter.minus(balanceBefore).equals(activationRewardAmount)) {
+      throw new Error("Referral wallet increment mismatch");
+    }
+
+    const referralTx = await client.transaction.create({
+      data: {
+        userId: referrerId,
+        type: "REFERRAL",
+        amount: activationRewardAmount,
+        balanceBefore,
+        balanceAfter,
+        meta: {
+          referredUserId,
+          milestone: "open_box_first_success",
+        },
+      },
+      select: { id: true },
+    });
+
+    await logAudit({
+      userId: referredUserId,
+      action: "referral_reward_triggered",
+      details: {
+        referrerId,
+        sourceAction,
+        transition: "JOINED_TO_ACTIVE",
+      },
+      tx: client,
+    });
+
+    await logAudit({
+      userId: referrerId,
+      action: "referral_reward",
+      details: {
+        rewardAmount: activationRewardAmount.toString(),
+        referredUserId,
+        sourceAction,
+      },
+      tx: client,
+    });
+
+    await emitReferralEvent({
+      event: "referral_reward_granted",
+      endpoint,
+      inviterId: referrerId,
+      referredUserId,
+      rewardAmount: activationRewardAmount.toString(),
+      status: "ACTIVE",
+      referralId: rewardGrant.id,
+      transactionId: referralTx.id,
+      correlationId,
+    });
+
+    return {
+      referredUserId,
+      referrerId,
+      rewardAmount: activationRewardAmount.toString(),
+      referralId: rewardGrant.id,
+      transactionId: referralTx.id,
+    };
+  };
+
+  if (tx) {
+    return runActivation(tx, "return-null");
+  }
+
+  return prisma.$transaction(async (client) => runActivation(client, "return-null"));
+}
+

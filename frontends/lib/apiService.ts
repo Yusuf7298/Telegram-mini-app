@@ -1,5 +1,4 @@
-import { AxiosRequestConfig } from 'axios';
-import api from './api';
+import apiClient from './apiClient';
 import { ApiResponse } from './apiTypes';
 
 export interface OpenBoxRequest {
@@ -51,11 +50,11 @@ export interface Transaction {
 
 // --- API Service ---
 const ApiService = {
-  openBox: (data: OpenBoxRequest, config?: AxiosRequestConfig) =>
-    api.post<ApiResponse<OpenBoxData>>('/game/open-box', data, config),
+  openBox: (data: OpenBoxRequest, config?: any) =>
+    apiClient.post('/game/open-box', data, config),
 
-  getWallet: (config?: AxiosRequestConfig) =>
-    api.get<ApiResponse<WalletData>>('/wallet', config),
+  getWallet: (config?: any) =>
+    apiClient.get('/wallet', config),
 };
 
 export default ApiService;

@@ -93,7 +93,7 @@ export default function HomePage() {
         {loadingPrizes ? (
           <div className="flex items-center gap-2 rounded-2xl bg-[#101B2A] p-4 text-sm text-white/80">
             <LoadingSpinner />
-            Loading prizes...
+            Loading prizes Please wait...
           </div>
         ) : prizesError ? (
           <div className="rounded-2xl bg-[#101B2A] p-4 text-sm text-red-300">{prizesError}</div>
@@ -105,7 +105,6 @@ export default function HomePage() {
           </div>
         )}
       </div>
-
       <Modal open={prizesOpen} onClose={() => setPrizesOpen(false)}>
         <div className="relative max-h-[90vh] w-full max-w-[700px] overflow-y-auto rounded-3xl bg-gradient-to-br from-[#0F2027] via-[#203A43] to-[#2C5364] p-6">
           <div className="mb-6 flex items-center justify-between">

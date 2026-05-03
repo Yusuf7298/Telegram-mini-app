@@ -27,7 +27,7 @@ function resolveAccountStatus(riskScore) {
     return "ACTIVE";
 }
 async function getWaitlistBonusAmount() {
-    const config = await (0, gameConfig_service_1.getValidatedGameConfig)();
+    const config = await (0, gameConfig_service_1.getValidatedGameConfig)({ bypassCache: true });
     return config.waitlistBonus;
 }
 async function findOrCreateTelegramUser(telegramUserId, username, userInfo, signupIp, signupDeviceId, userAgent) {
